@@ -74,7 +74,8 @@ function Get-GraphCollection {
         $response = Invoke-MgGraphRequest -Method GET -Uri $Uri -OutputType PSObject
         if ($null -ne $response.value) { foreach ($item in $response.value) { $items.Add($item) } }
         else { $items.Add($response); break }
-        $Uri = $response.'@odata.nextLink'
+        $nextLinkProperty = $response.PSObject.Properties['@odata.nextLink']
+        $Uri = if ($nextLinkProperty) { [string]$nextLinkProperty.Value } else { $null }
     }
     return $items.ToArray()
 }
