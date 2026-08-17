@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.1.0'
+$solutionVersion = '1.1.1'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -301,7 +301,21 @@ $results = foreach ($user in $users) {
     }
     $minimum = Get-MinimumPlan $needs $catalog
     $hasExchangeLicense = @($knownCurrentPlans | Where-Object { $_.features.email }).Count -gt 0
-    $sharedMailboxCandidate = ($hasExchangeLicense -and $null -ne $signInDays -and $signInDays -gt 90)
+    if (-not $hasExchangeLicense) {
+        foreach ($assignedLicense in @($user.assignedLicenses)) {
+            $assignedSku = $skuById[[string]$assignedLicense.skuId]
+            if (-not $assignedSku) { continue }
+            $disabledPlanIds = @($assignedLicense.disabledPlans | ForEach-Object { [string]$_ })
+            $activeExchangePlans = @($assignedSku.servicePlans | Where-Object {
+                $_.servicePlanName -like 'EXCHANGE*' -and
+                $_.provisioningStatus -ne 'Disabled' -and
+                [string]$_.servicePlanId -notin $disabledPlanIds
+            })
+            if ($activeExchangePlans.Count -gt 0) { $hasExchangeLicense = $true; break }
+        }
+    }
+    $inactiveForSharedMailbox = (-not [bool]$user.accountEnabled) -or ($null -ne $signInDays -and $signInDays -gt 90)
+    $sharedMailboxCandidate = $hasExchangeLicense -and $inactiveForSharedMailbox
     $recommendation = if ($assignedParts.Count -eq 0) { 'Sem licenca atribuida' }
         elseif ($sharedMailboxCandidate) { 'Candidato a caixa compartilhada; validar tamanho, arquivo, retencao/hold, acesso delegado e bloquear login antes de remover licencas' }
         elseif ($null -eq $minimum) { 'Candidato a remocao completa; validar funcao, retencao, caixa compartilhada e requisitos de seguranca' }
@@ -319,6 +333,7 @@ $results = foreach ($user in $users) {
         UltimoSharePoint = $siteDate; DiasSemSharePoint = $siteDays; StatusSharePoint = Get-UsageState $siteDays
         UltimoOfficeDesktop = $desktopDate; DiasSemOfficeDesktop = $desktopDays; StatusOfficeDesktop = Get-UsageState $desktopDays
         UltimoOfficeWeb = $webDate; DiasSemOfficeWeb = $webDays; StatusOfficeWeb = Get-UsageState $webDays
+        ExchangeDetectado = $hasExchangeLicense
         CandidatoCaixaCompartilhada = $sharedMailboxCandidate
         Recomendacao = $recommendation; PlanoMinimoSugerido = if ($sharedMailboxCandidate) { 'Caixa compartilhada (sem licenca, se elegivel)' } elseif ($minimum) { $minimum.name } else { $null }
         PrecoSugeridoMensalBRL = $recommendedPrice; EconomiaMensalEstimadaBRL = $saving
