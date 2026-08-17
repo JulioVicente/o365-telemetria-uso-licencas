@@ -14,6 +14,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Write-ExecutionStatus {
+    param([int]$Percent, [string]$Message)
+    Write-Progress -Activity 'Avaliacao de licencas Microsoft 365' -Status $Message -PercentComplete $Percent
+    Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message) -ForegroundColor Cyan
+}
+
 function Import-RequiredModule {
     param([Parameter(Mandatory)] [string]$Name)
     if (-not (Get-Module -ListAvailable -Name $Name)) {
@@ -104,6 +110,7 @@ $catalog = @($catalogData.plans)
 
 $scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 'Reports.Read.All')
 if ($SendEmail) { $scopes += 'Mail.Send' }
+Write-ExecutionStatus 5 'Aguardando autenticacao no Microsoft 365...'
 Connect-MgGraph -Scopes $scopes -NoWelcome
 
 $context = Get-MgContext
@@ -112,20 +119,28 @@ if ($ExpectedAccount -and $context.Account -ine $ExpectedAccount) {
     throw "A conta autenticada '$($context.Account)' nao corresponde ao usuario informado '$ExpectedAccount'. Execute novamente e entre com o usuario informado na instalacao."
 }
 if ($SendEmail -and [string]::IsNullOrWhiteSpace($EmailTo)) { $EmailTo = $context.Account }
+Write-ExecutionStatus 10 'Autenticacao concluida. Iniciando coleta; esta etapa pode levar alguns minutos.'
 $now = [datetime]::UtcNow
 $runId = $now.ToString('yyyyMMdd-HHmmss')
 $runPath = Join-Path $OutputPath $runId
 New-Item -ItemType Directory -Path $runPath -Force | Out-Null
 
 $usersUri = "https://graph.microsoft.com/v1.0/users?`$select=id,displayName,userPrincipalName,userType,accountEnabled,assignedLicenses,signInActivity&`$top=999"
+Write-ExecutionStatus 18 'Coletando usuarios e atividade de login...'
 $users = @(Get-GraphCollection $usersUri)
 if (-not $IncludeGuests) { $users = @($users | Where-Object userType -EQ 'Member') }
+Write-ExecutionStatus 25 'Coletando assinaturas e SKUs do tenant...'
 $skus = @(Get-GraphCollection 'https://graph.microsoft.com/v1.0/subscribedSkus')
 
+Write-ExecutionStatus 33 'Coletando atividade geral do Microsoft 365...'
 $activeUsers = @(Get-ReportCsv 'getOffice365ActiveUserDetail' $TelemetryPeriodDays)
+Write-ExecutionStatus 41 'Coletando atividade dos aplicativos Office...'
 $appUsers = @(Get-ReportCsv 'getM365AppUserDetail' $TelemetryPeriodDays)
+Write-ExecutionStatus 49 'Coletando atividade de email...'
 $emailUsers = @(Get-ReportCsv 'getEmailActivityUserDetail' $TelemetryPeriodDays)
+Write-ExecutionStatus 57 'Coletando atividade do OneDrive...'
 $oneDriveUsers = @(Get-ReportCsv 'getOneDriveActivityUserDetail' $TelemetryPeriodDays)
+Write-ExecutionStatus 65 'Coletando atividade do SharePoint...'
 $sharePointUsers = @(Get-ReportCsv 'getSharePointActivityUserDetail' $TelemetryPeriodDays)
 
 function New-ReportIndex { param([object[]]$Rows)
@@ -144,6 +159,7 @@ $sharePointIndex = New-ReportIndex $sharePointUsers
 $skuById = @{}; foreach ($sku in $skus) { $skuById[[string]$sku.skuId] = $sku }
 $priceBySku = @{}; foreach ($plan in $catalog) { foreach ($part in $plan.skuPartNumbers) { $priceBySku[$part] = $plan } }
 
+Write-ExecutionStatus 72 'Consolidando telemetria e avaliando licencas...'
 $results = foreach ($user in $users) {
     $key = [string]$user.userPrincipalName.ToLowerInvariant()
     $active = $activeIndex[$key]; $apps = $appIndex[$key]; $email = $emailIndex[$key]
@@ -197,6 +213,7 @@ $results = foreach ($user in $users) {
 }
 
 $csvPath = Join-Path $runPath 'analise-usuarios.csv'
+Write-ExecutionStatus 82 'Gerando relatorio executivo e anexos...'
 $results | Sort-Object UPN | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding utf8BOM
 $summary = [pscustomobject]@{
     generatedAtUtc = $now.ToString('o'); tenantId = $context.TenantId; account = $context.Account
@@ -270,6 +287,7 @@ $htmlPath = Join-Path $runPath 'relatorio.html'
 Set-Content -LiteralPath $htmlPath -Value $html -Encoding utf8
 
 if ($SendEmail) {
+    Write-ExecutionStatus 94 'Enviando relatorio por email...'
     if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw 'Nao foi possivel determinar o email da conta autenticada.' }
     $attachmentBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($csvPath))
     $actionPlanBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($actionPlanPath))
@@ -289,7 +307,9 @@ if ($SendEmail) {
 }
 
 if ($SendEmail) {
+    Write-Progress -Activity 'Avaliacao de licencas Microsoft 365' -Completed
     Write-Host 'Analise concluida e relatorio enviado por email.' -ForegroundColor Green
 } else {
+    Write-Progress -Activity 'Avaliacao de licencas Microsoft 365' -Completed
     Write-Host "Relatorio gerado em: $runPath"
 }
