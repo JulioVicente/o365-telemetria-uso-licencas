@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.1.1'
+$solutionVersion = '1.2.0'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -183,6 +183,23 @@ function Get-MinimumPlan {
     return $eligible | Select-Object -First 1
 }
 
+function Test-UserServiceEntitlement {
+    param([object[]]$AssignedLicenses, [hashtable]$SkuIndex, [string[]]$ServicePlanPatterns)
+    foreach ($assignedLicense in @($AssignedLicenses)) {
+        $assignedSku = $SkuIndex[[string]$assignedLicense.skuId]
+        if (-not $assignedSku) { continue }
+        $disabledPlanIds = @($assignedLicense.disabledPlans | ForEach-Object { [string]$_ })
+        foreach ($servicePlan in @($assignedSku.servicePlans)) {
+            $matches = $false
+            foreach ($pattern in $ServicePlanPatterns) {
+                if ($servicePlan.servicePlanName -like $pattern) { $matches = $true; break }
+            }
+            if ($matches -and $servicePlan.provisioningStatus -ne 'Disabled' -and [string]$servicePlan.servicePlanId -notin $disabledPlanIds) { return $true }
+        }
+    }
+    return $false
+}
+
 Import-RequiredModule Microsoft.Graph.Authentication
 if (-not (Test-Path -LiteralPath $PriceCatalogPath)) { throw "Catalogo nao encontrado: $PriceCatalogPath" }
 $catalogData = Get-Content -LiteralPath $PriceCatalogPath -Raw | ConvertFrom-Json
@@ -216,7 +233,8 @@ try {
         @{Name='aplicativos Office';Api='getM365AppUserDetail'},
         @{Name='email';Api='getEmailActivityUserDetail'},
         @{Name='OneDrive';Api='getOneDriveActivityUserDetail'},
-        @{Name='SharePoint';Api='getSharePointActivityUserDetail'}
+        @{Name='SharePoint';Api='getSharePointActivityUserDetail'},
+        @{Name='Teams';Api='getTeamsUserActivityUserDetail'}
     )) {
         Invoke-WithSpinner "Validando relatorio de $($probe.Name)" { Get-ReportCsv $probe.Api 7 | Out-Null }
     }
@@ -253,6 +271,8 @@ Write-ExecutionStatus 57 'Coletando atividade do OneDrive...'
 $oneDriveUsers = @(Invoke-WithSpinner 'Baixando atividade do OneDrive' { Get-ReportCsv 'getOneDriveActivityUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 65 'Coletando atividade do SharePoint...'
 $sharePointUsers = @(Invoke-WithSpinner 'Baixando atividade do SharePoint' { Get-ReportCsv 'getSharePointActivityUserDetail' $TelemetryPeriodDays })
+Write-ExecutionStatus 69 'Coletando atividade do Microsoft Teams...'
+$teamsUsers = @(Invoke-WithSpinner 'Baixando atividade do Teams' { Get-ReportCsv 'getTeamsUserActivityUserDetail' $TelemetryPeriodDays })
 
 function New-ReportIndex { param([object[]]$Rows)
     $index = @{}
@@ -267,6 +287,7 @@ $appIndex = New-ReportIndex $appUsers
 $emailIndex = New-ReportIndex $emailUsers
 $oneDriveIndex = New-ReportIndex $oneDriveUsers
 $sharePointIndex = New-ReportIndex $sharePointUsers
+$teamsIndex = New-ReportIndex $teamsUsers
 $skuById = @{}; foreach ($sku in $skus) { $skuById[[string]$sku.skuId] = $sku }
 $priceBySku = @{}; foreach ($plan in $catalog) { foreach ($part in $plan.skuPartNumbers) { $priceBySku[$part] = $plan } }
 
@@ -274,7 +295,7 @@ Write-ExecutionStatus 72 'Consolidando telemetria e avaliando licencas...'
 $results = foreach ($user in $users) {
     $key = [string]$user.userPrincipalName.ToLowerInvariant()
     $active = $activeIndex[$key]; $apps = $appIndex[$key]; $email = $emailIndex[$key]
-    $drive = $oneDriveIndex[$key]; $site = $sharePointIndex[$key]
+    $drive = $oneDriveIndex[$key]; $site = $sharePointIndex[$key]; $teams = $teamsIndex[$key]
     $signInActivityProperty = $user.PSObject.Properties['signInActivity']
     $signInActivity = if ($signInActivityProperty) { $signInActivityProperty.Value } else { $null }
     $signInDate = Convert-ToDateOrNull (Find-PropertyValue $signInActivity @('lastSuccessfulSignInDateTime'))
@@ -284,9 +305,11 @@ $results = foreach ($user in $users) {
     $siteDate = Convert-ToDateOrNull (Find-PropertyValue $site @('Last Activity Date'))
     $desktopDate = Convert-ToDateOrNull (Find-PropertyValue $apps @('Last Activity Date', 'Last Activated Date'))
     $webDate = Convert-ToDateOrNull (Find-PropertyValue $active @('Office 365 Last Activity Date', 'Microsoft 365 Apps Last Activity Date'))
+    $teamsDate = Convert-ToDateOrNull (Find-PropertyValue $teams @('Last Activity Date'))
     $signInDays = Get-DaysSince $signInDate $now; $emailDays = Get-DaysSince $emailDate $now
     $driveDays = Get-DaysSince $driveDate $now; $siteDays = Get-DaysSince $siteDate $now
     $desktopDays = Get-DaysSince $desktopDate $now; $webDays = Get-DaysSince $webDate $now
+    $teamsDays = Get-DaysSince $teamsDate $now
 
     $assignedParts = @($user.assignedLicenses | ForEach-Object { $skuById[[string]$_.skuId].skuPartNumber } | Where-Object { $_ })
     $knownCurrentPlans = @($assignedParts | ForEach-Object { $priceBySku[$_] } | Where-Object { $_ } | Sort-Object name -Unique)
@@ -300,20 +323,13 @@ $results = foreach ($user in $users) {
         OfficeDesktop = ($null -ne $desktopDays -and $desktopDays -le 90)
     }
     $minimum = Get-MinimumPlan $needs $catalog
-    $hasExchangeLicense = @($knownCurrentPlans | Where-Object { $_.features.email }).Count -gt 0
-    if (-not $hasExchangeLicense) {
-        foreach ($assignedLicense in @($user.assignedLicenses)) {
-            $assignedSku = $skuById[[string]$assignedLicense.skuId]
-            if (-not $assignedSku) { continue }
-            $disabledPlanIds = @($assignedLicense.disabledPlans | ForEach-Object { [string]$_ })
-            $activeExchangePlans = @($assignedSku.servicePlans | Where-Object {
-                $_.servicePlanName -like 'EXCHANGE*' -and
-                $_.provisioningStatus -ne 'Disabled' -and
-                [string]$_.servicePlanId -notin $disabledPlanIds
-            })
-            if ($activeExchangePlans.Count -gt 0) { $hasExchangeLicense = $true; break }
-        }
-    }
+    $hasExchangeLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('EXCHANGE*')
+    $hasTeamsLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('TEAMS*')
+    $hasSharePointLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('SHAREPOINT*')
+    $hasOneDriveLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('ONEDRIVE*','SHAREPOINT*')
+    $hasOfficeDesktopLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('OFFICESUBSCRIPTION*','OFFICE_BUSINESS*','OFFICE_PRO_PLUS*')
+    $hasOfficeWebLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('SHAREPOINTWAC*','WACONEDRIVE*','OFFICE_WEB*')
+    $teamsReviewCandidate = $hasTeamsLicense -and ($null -eq $teamsDays -or $teamsDays -gt 30)
     $inactiveForSharedMailbox = (-not [bool]$user.accountEnabled) -or ($null -ne $signInDays -and $signInDays -gt 90)
     $sharedMailboxCandidate = $hasExchangeLicense -and $inactiveForSharedMailbox
     $recommendation = if ($assignedParts.Count -eq 0) { 'Sem licenca atribuida' }
@@ -328,11 +344,13 @@ $results = foreach ($user in $users) {
         LicencasAtuais = ($assignedParts -join '; '); LicencasSemPrecoPublico = ($unpriced -join '; ')
         PrecoAtualMensalBRL = if ($unpriced.Count -eq 0) { [decimal]$currentPrice } else { $null }
         UltimoLogin = $signInDate; DiasSemLogin = $signInDays; StatusLogin = Get-UsageState $signInDays
-        UltimoEmail = $emailDate; DiasSemEmail = $emailDays; StatusEmail = Get-UsageState $emailDays
-        UltimoOneDrive = $driveDate; DiasSemOneDrive = $driveDays; StatusOneDrive = Get-UsageState $driveDays
-        UltimoSharePoint = $siteDate; DiasSemSharePoint = $siteDays; StatusSharePoint = Get-UsageState $siteDays
-        UltimoOfficeDesktop = $desktopDate; DiasSemOfficeDesktop = $desktopDays; StatusOfficeDesktop = Get-UsageState $desktopDays
-        UltimoOfficeWeb = $webDate; DiasSemOfficeWeb = $webDays; StatusOfficeWeb = Get-UsageState $webDays
+        EmailLicenciado = $hasExchangeLicense; UltimoEmail = $emailDate; DiasSemEmail = $emailDays; StatusEmail = Get-UsageState $emailDays; CandidatoRevisaoEmail = ($hasExchangeLicense -and ($null -eq $emailDays -or $emailDays -gt 30))
+        OneDriveLicenciado = $hasOneDriveLicense; UltimoOneDrive = $driveDate; DiasSemOneDrive = $driveDays; StatusOneDrive = Get-UsageState $driveDays; CandidatoRevisaoOneDrive = ($hasOneDriveLicense -and ($null -eq $driveDays -or $driveDays -gt 30))
+        SharePointLicenciado = $hasSharePointLicense; UltimoSharePoint = $siteDate; DiasSemSharePoint = $siteDays; StatusSharePoint = Get-UsageState $siteDays; CandidatoRevisaoSharePoint = ($hasSharePointLicense -and ($null -eq $siteDays -or $siteDays -gt 30))
+        OfficeDesktopLicenciado = $hasOfficeDesktopLicense; UltimoOfficeDesktop = $desktopDate; DiasSemOfficeDesktop = $desktopDays; StatusOfficeDesktop = Get-UsageState $desktopDays; CandidatoRevisaoOfficeDesktop = ($hasOfficeDesktopLicense -and ($null -eq $desktopDays -or $desktopDays -gt 30))
+        OfficeWebLicenciado = $hasOfficeWebLicense; UltimoOfficeWeb = $webDate; DiasSemOfficeWeb = $webDays; StatusOfficeWeb = Get-UsageState $webDays; CandidatoRevisaoOfficeWeb = ($hasOfficeWebLicense -and ($null -eq $webDays -or $webDays -gt 30))
+        TeamsLicenciado = $hasTeamsLicense; UltimoTeams = $teamsDate; DiasSemTeams = $teamsDays; StatusTeams = Get-UsageState $teamsDays
+        CandidatoRevisaoTeams = $teamsReviewCandidate
         ExchangeDetectado = $hasExchangeLicense
         CandidatoCaixaCompartilhada = $sharedMailboxCandidate
         Recomendacao = $recommendation; PlanoMinimoSugerido = if ($sharedMailboxCandidate) { 'Caixa compartilhada (sem licenca, se elegivel)' } elseif ($minimum) { $minimum.name } else { $null }
@@ -357,18 +375,51 @@ $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runPat
 function Get-InactivityCount([string]$DaysProperty, [int]$Threshold) {
     return @($results | Where-Object { $null -ne $_.$DaysProperty -and $_.$DaysProperty -gt $Threshold }).Count
 }
+function Get-LicensedInactivityCount([string]$DaysProperty, [string]$LicensedProperty, [int]$Threshold) {
+    return @($results | Where-Object { $_.$LicensedProperty -and ($null -eq $_.$DaysProperty -or [int]$_.$DaysProperty -gt $Threshold) }).Count
+}
 $inactivity = [ordered]@{
     Login30 = Get-InactivityCount 'DiasSemLogin' 30; Login90 = Get-InactivityCount 'DiasSemLogin' 90
-    Email30 = Get-InactivityCount 'DiasSemEmail' 30; Email90 = Get-InactivityCount 'DiasSemEmail' 90
-    OneDrive30 = Get-InactivityCount 'DiasSemOneDrive' 30; OneDrive90 = Get-InactivityCount 'DiasSemOneDrive' 90
-    SharePoint30 = Get-InactivityCount 'DiasSemSharePoint' 30; SharePoint90 = Get-InactivityCount 'DiasSemSharePoint' 90
-    OfficeDesktop30 = Get-InactivityCount 'DiasSemOfficeDesktop' 30; OfficeDesktop90 = Get-InactivityCount 'DiasSemOfficeDesktop' 90
-    OfficeWeb30 = Get-InactivityCount 'DiasSemOfficeWeb' 30; OfficeWeb90 = Get-InactivityCount 'DiasSemOfficeWeb' 90
+    Email30 = Get-LicensedInactivityCount 'DiasSemEmail' 'EmailLicenciado' 30; Email90 = Get-LicensedInactivityCount 'DiasSemEmail' 'EmailLicenciado' 90
+    OneDrive30 = Get-LicensedInactivityCount 'DiasSemOneDrive' 'OneDriveLicenciado' 30; OneDrive90 = Get-LicensedInactivityCount 'DiasSemOneDrive' 'OneDriveLicenciado' 90
+    SharePoint30 = Get-LicensedInactivityCount 'DiasSemSharePoint' 'SharePointLicenciado' 30; SharePoint90 = Get-LicensedInactivityCount 'DiasSemSharePoint' 'SharePointLicenciado' 90
+    OfficeDesktop30 = Get-LicensedInactivityCount 'DiasSemOfficeDesktop' 'OfficeDesktopLicenciado' 30; OfficeDesktop90 = Get-LicensedInactivityCount 'DiasSemOfficeDesktop' 'OfficeDesktopLicenciado' 90
+    OfficeWeb30 = Get-LicensedInactivityCount 'DiasSemOfficeWeb' 'OfficeWebLicenciado' 30; OfficeWeb90 = Get-LicensedInactivityCount 'DiasSemOfficeWeb' 'OfficeWebLicenciado' 90
+    Teams30 = Get-LicensedInactivityCount 'DiasSemTeams' 'TeamsLicenciado' 30; Teams90 = Get-LicensedInactivityCount 'DiasSemTeams' 'TeamsLicenciado' 90
 }
-$inactivityRows = foreach ($service in 'Login','Email','OneDrive','SharePoint','OfficeDesktop','OfficeWeb') {
+$inactivityRows = foreach ($service in 'Login','Email','OneDrive','SharePoint','OfficeDesktop','OfficeWeb','Teams') {
     [pscustomobject]@{ Servico=$service; 'Sem uso >30 dias'=$inactivity["${service}30"]; 'Sem uso >90 dias'=$inactivity["${service}90"] }
 }
 $inactivityHtml = ($inactivityRows | ConvertTo-Html -Fragment) -join "`n"
+$teamsReviewRows = @($results | Where-Object CandidatoRevisaoTeams | Sort-Object @{Expression={if($null -eq $_.DiasSemTeams){[int]::MaxValue}else{$_.DiasSemTeams}};Descending=$true})
+$teamsReviewHtml = if ($teamsReviewRows.Count -gt 0) {
+    ($teamsReviewRows | ConvertTo-Html -Fragment -Property Nome,UPN,ContaHabilitada,LicencasAtuais,UltimoTeams,DiasSemTeams,StatusTeams) -join "`n"
+} else { '<p>Nenhum usuario licenciado para Teams sem atividade acima de 30 dias.</p>' }
+$serviceReviewRows = [System.Collections.Generic.List[object]]::new()
+foreach ($result in $results) {
+    foreach ($definition in @(
+        @{Service='Email';Licensed='EmailLicenciado';Days='DiasSemEmail';Status='StatusEmail'},
+        @{Service='OneDrive';Licensed='OneDriveLicenciado';Days='DiasSemOneDrive';Status='StatusOneDrive'},
+        @{Service='SharePoint';Licensed='SharePointLicenciado';Days='DiasSemSharePoint';Status='StatusSharePoint'},
+        @{Service='Office Desktop';Licensed='OfficeDesktopLicenciado';Days='DiasSemOfficeDesktop';Status='StatusOfficeDesktop'},
+        @{Service='Office Web';Licensed='OfficeWebLicenciado';Days='DiasSemOfficeWeb';Status='StatusOfficeWeb'},
+        @{Service='Teams';Licensed='TeamsLicenciado';Days='DiasSemTeams';Status='StatusTeams'}
+    )) {
+        if (-not $result.($definition.Licensed)) { continue }
+        $daysWithoutUse = $result.($definition.Days)
+        if ($null -ne $daysWithoutUse -and [int]$daysWithoutUse -le 30) { continue }
+        $serviceReviewRows.Add([pscustomobject]@{
+            Servico=$definition.Service;Nome=$result.Nome;UPN=$result.UPN;ContaHabilitada=$result.ContaHabilitada
+            LicencasAtuais=$result.LicencasAtuais;DiasSemUso=$daysWithoutUse;Status=$result.($definition.Status)
+            JanelaOtimizacao=if($null -eq $daysWithoutUse -or [int]$daysWithoutUse -gt 90){'>90 dias / sem uso observado'}else{'>30 dias'}
+        })
+    }
+}
+$serviceReviewPath = Join-Path $runPath 'licencas-servicos-sem-uso.csv'
+$serviceReviewRows | Sort-Object Servico,UPN | Export-Csv -LiteralPath $serviceReviewPath -NoTypeInformation -Encoding utf8BOM
+$serviceReviewHtml = if ($serviceReviewRows.Count -gt 0) {
+    ($serviceReviewRows | Sort-Object Servico,JanelaOtimizacao,UPN | ConvertTo-Html -Fragment -Property Servico,Nome,UPN,ContaHabilitada,LicencasAtuais,DiasSemUso,Status,JanelaOtimizacao) -join "`n"
+} else { '<p>Nenhum direito de servico sem uso acima de 30 dias.</p>' }
 
 $sharedCount = $summary.sharedMailboxCandidates
 $unpricedCount = @($results | Where-Object LicencasSemPrecoPublico).Count
@@ -383,7 +434,7 @@ $planActions = @(
     [pscustomobject]@{ID=8;Pilar='Identidade';Acao='Medir cobertura de MFA e revisar contas administrativas';Origem='Indicadores';Prioridade='Alta';Responsavel='Administrador de identidade';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Nao coletado';ProximoPasso='Executar relatorio de MFA e separar contas administrativas';Fonte='Principio de menor privilegio'},
     [pscustomobject]@{ID=9;Pilar='Seguranca';Acao='Consultar Secure Score e separar acoes alcancaveis pela licenca atual';Origem='Indicadores';Prioridade='Media';Responsavel='Seguranca';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Secure Score nao coletado';ProximoPasso='Executar avaliacao de seguranca';Fonte='Microsoft Secure Score'},
     [pscustomobject]@{ID=10;Pilar='Auditoria';Acao='Confirmar disponibilidade e retencao do Audit Standard';Origem='Indicadores';Prioridade='Media';Responsavel='Compliance';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Retencao de auditoria nao coletada';ProximoPasso='Testar uma pesquisa de auditoria';Fonte='Varia por plano e retencao'},
-    [pscustomobject]@{ID=11;Pilar='Colaboracao';Acao='Definir regra simples para Teams, SharePoint e OneDrive';Origem='Colaboracao';Prioridade='Media';Responsavel='Gestores das areas';Prazo='';Status='Em andamento';Evidencia="$($inactivity.SharePoint90) sem SharePoint >90 dias; $($inactivity.OneDrive90) sem OneDrive >90 dias";ProximoPasso='Validar regras com usuarios-chave e incluir Teams em avaliacao complementar';Fonte='Lugar, acesso e tempo'},
+    [pscustomobject]@{ID=11;Pilar='Colaboracao';Acao='Definir regra simples para Teams, SharePoint e OneDrive';Origem='Colaboracao';Prioridade='Media';Responsavel='Gestores das areas';Prazo='';Status='Em andamento';Evidencia="$($inactivity.SharePoint90) sem SharePoint >90 dias; $($inactivity.OneDrive90) sem OneDrive >90 dias; $($inactivity.Teams90) licenciados sem Teams >90 dias";ProximoPasso='Validar regras e necessidade de Teams com usuarios-chave';Fonte='Lugar, acesso e tempo'},
     [pscustomobject]@{ID=12;Pilar='Ciclo de vida';Acao='Padronizar onboarding com conta, licenca, grupo, dispositivo e MFA';Origem='Onboarding';Prioridade='Alta';Responsavel='RH + TI';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Processo organizacional nao coletado';ProximoPasso='Criar checklist e aprovacao';Fonte='Revisar acesso apos entrada'},
     [pscustomobject]@{ID=13;Pilar='Ciclo de vida';Acao='Padronizar desligamento e transferencia de dados';Origem='Desligamento';Prioridade='Alta';Responsavel='RH + TI';Prazo='';Status='Em andamento';Evidencia="$sharedCount contas candidatas a caixa compartilhada por inatividade >90 dias";ProximoPasso='Validar preservacao, delegados, bloqueio de login e requisitos de licenca';Fonte='Acesso encerrado; dados preservados'},
     [pscustomobject]@{ID=14;Pilar='IA';Acao='Selecionar casos de uso de Copilot e revisar permissoes';Origem='IA responsavel';Prioridade='Media';Responsavel='Negocio + TI';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Uso e permissoes do Copilot nao coletados';ProximoPasso='Escolher grupo piloto e metricas';Fonte='IA respeita permissoes existentes'},
@@ -406,6 +457,8 @@ body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-s
 <div class="cards"><div class="card"><div class="value">$(@($results).Count)</div><div class="label">Usuarios analisados</div></div><div class="card"><div class="value">$($summary.sharedMailboxCandidates)</div><div class="label">Candidatos a caixa compartilhada</div></div><div class="card"><div class="value">$($summary.removalCandidates)</div><div class="label">Candidatos a remocao</div></div><div class="card saving"><div class="value">R$ $($summary.estimatedMonthlySavingsBRL.ToString('N2'))</div><div class="label">Economia mensal estimada</div></div></div>
 <div class="good"><b>Objetivo:</b> priorizar oportunidades de economia sem executar qualquer alteracao automatica no tenant. O CSV anexo contem todos os usuarios e campos da analise.</div>
 <h2>Janela de inatividade por servico</h2><p>O quadro abaixo permite separar oportunidades recentes (mais de 30 dias) das mais consolidadas (mais de 90 dias).</p><div class="table-wrap">$inactivityHtml</div>
+<h2>Licencas Teams sem uso observado</h2><p>Usuarios com um service plan ativo do Teams e sem atividade observada ha mais de 30 dias. Ausencia de atividade pode incluir usuarios nunca vistos na janela; confirme contexto antes de remover standalone, complemento ou migrar para uma suite sem Teams.</p><div class="table-wrap">$teamsReviewHtml</div>
+<h2>Matriz licenciado versus utilizado</h2><p>Direitos ativos de email, OneDrive, SharePoint, Office Desktop, Office Web e Teams sem uso observado acima de 30 dias. A janela acima de 90 dias indica maior prioridade de revisao.</p><div class="table-wrap">$serviceReviewHtml</div>
 <h2>Recomendacoes por usuario</h2><p>Ordenadas pela maior economia mensal estimada. Caixas sem login por mais de 90 dias recebem destaque como candidatas a caixa compartilhada.</p><div class="table-wrap">$rowsHtml</div>
 <h2>Plano de acoes — Microsoft 365 na pratica</h2><p><b>16</b> acoes mapeadas: <b>$completedActions</b> concluidas pelo diagnostico, <b>$inProgressActions</b> em andamento e <b>$notAssessedActions</b> ainda nao avaliadas neste escopo. Responsaveis e prazos devem ser confirmados com o cliente.</p><div class="table-wrap">$actionPlanHtml</div>
 <h2>Como interpretar</h2><div class="note"><b>Revisao humana obrigatoria.</b> Ausencia de atividade nao comprova ausencia de necessidade. Antes de reduzir ou remover licencas, valide funcao do usuario, acesso delegado, tamanho da caixa, arquivo, retencao/hold, seguranca, compliance, dispositivos, Teams/telefonia e demais complementos. Valores sem preco publico nao entram na economia estimada.</div>
@@ -421,7 +474,7 @@ if ($SendEmail) {
     try {
         $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
         try {
-            foreach ($file in @($csvPath, $actionPlanPath, $htmlPath, (Join-Path $runPath 'resumo.json'))) {
+            foreach ($file in @($csvPath, $actionPlanPath, $serviceReviewPath, $htmlPath, (Join-Path $runPath 'resumo.json'))) {
                 [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, (Split-Path $file -Leaf), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
             }
         } finally { $archive.Dispose() }

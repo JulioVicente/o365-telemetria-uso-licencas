@@ -47,7 +47,8 @@ Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv` e
 
 ## Criterios e limites
 
-- Login e cada carga de trabalho sao classificados em ativo ate 30 dias, inativo entre 31 e 90 dias, inativo acima de 90 dias ou sem atividade observada.
+- Login e cada carga de trabalho, incluindo Microsoft Teams, sao classificados em ativo ate 30 dias, inativo entre 31 e 90 dias, inativo acima de 90 dias ou sem atividade observada.
+- O relatorio separa usuarios com um service plan Teams ativo e sem uso ha mais de 30/90 dias. A recomendacao distingue candidatura a revisao; Teams incluido em uma suite pode exigir migracao para um SKU sem Teams, enquanto licencas standalone ou complementos podem permitir retirada direta.
 - Uma conta com licenca que inclui Exchange e sem login ha mais de 90 dias e marcada como candidata a caixa compartilhada. Isso preserva um endereco funcional e pode permitir a retirada da licenca, mas requer validacao antes da mudanca.
 - A recomendacao usa atividade observada em ate 180 dias. Sem atividade em todas as cargas, o usuario vira candidato a remocao, sujeito a validacao humana.
 - O menor plano sugerido cobre apenas email, OneDrive, SharePoint, Office Web e Office Desktop observados. Seguranca, Intune, Defender, Teams/telefonia, Power BI, compliance, arquivo e retencao exigem revisao humana; por isso planos Premium/E5 nao sao sugeridos automaticamente.
