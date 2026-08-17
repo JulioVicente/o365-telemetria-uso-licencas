@@ -62,7 +62,8 @@ function Copy-ProjectFiles([string]$Destination) {
         if ($local -and (Test-Path -LiteralPath $local -PathType Leaf)) {
             Copy-Item -LiteralPath $local -Destination $target -Force
         } else {
-            $uri = "$($RepositoryRawUrl.TrimEnd('/'))/$relativePath"
+        $cacheKey = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        $uri = "$($RepositoryRawUrl.TrimEnd('/'))/$relativePath`?nocache=$cacheKey"
             try { Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $target }
             catch {
                 Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue

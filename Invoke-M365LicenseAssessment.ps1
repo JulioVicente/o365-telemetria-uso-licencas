@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$solutionVersion = '1.0.4'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -151,6 +152,7 @@ $catalog = @($catalogData.plans)
 $scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 'Reports.Read.All')
 if ($SendEmail) { $scopes += 'Mail.Send' }
 Write-ExecutionStatus 5 'Aguardando autenticacao no Microsoft 365...'
+Write-Host "M365 License Assessment v$solutionVersion" -ForegroundColor Green
 Connect-MgGraph -Scopes $scopes -NoWelcome
 
 $context = Get-MgContext

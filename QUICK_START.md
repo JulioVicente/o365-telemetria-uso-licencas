@@ -9,6 +9,8 @@ Get-Content "$env:TEMP\Install-M365LicenseAssessment.ps1"
 & "$env:TEMP\Install-M365LicenseAssessment.ps1"
 ```
 
+Se estiver repetindo um teste apos uma atualizacao, acrescente `?nocache=<numero>` ao endereco do instalador para evitar uma copia antiga do cache.
+
 O destino padrao e `%ProgramData%\M365LicenseAssessment`. O instalador solicita somente o e-mail do usuario que concedera as permissoes e recebera o relatorio; nao solicita um remetente separado. No login, a conta autenticada deve corresponder ao e-mail informado. A BestSoft recebe a copia oculta. A instalacao somente termina depois que a coleta e o envio forem aceitos pelo Microsoft Graph.
 
 Depois, execute quando desejar:
