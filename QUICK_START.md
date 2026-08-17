@@ -20,4 +20,4 @@ $root = "$env:ProgramData\M365LicenseAssessment"
 
 Na primeira conexao, autentique-se com o usuario informado e consinta as permissoes solicitadas, inclusive `Mail.Send`. Toda execucao instalada envia o relatorio ao proprio usuario e uma copia oculta para a BestSoft. Nenhuma licenca ou caixa postal e alterada.
 
-Apos o login, o terminal mostra horario, etapa e percentual da coleta. Relatorios do Microsoft 365 podem levar alguns minutos; aguarde a confirmacao final de envio ou uma mensagem explicita de erro.
+Apos o login, o terminal mostra horario, etapa, percentual e um indicador animado `| / - \` com tempo decorrido durante chamadas demoradas. Relatorios do Microsoft 365 podem levar alguns minutos; aguarde a confirmacao final de envio ou uma mensagem explicita de erro.

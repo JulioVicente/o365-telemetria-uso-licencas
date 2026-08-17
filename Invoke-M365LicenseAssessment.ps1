@@ -20,6 +20,45 @@ function Write-ExecutionStatus {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message) -ForegroundColor Cyan
 }
 
+if (-not ('M365LicenseAssessment.ConsoleSpinner' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Threading;
+namespace M365LicenseAssessment {
+    public sealed class ConsoleSpinner : IDisposable {
+        private readonly string text;
+        private readonly DateTime started = DateTime.UtcNow;
+        private readonly Timer timer;
+        private readonly char[] frames = new[] { '|', '/', '-', '\\' };
+        private int index;
+        private readonly bool enabled;
+        public ConsoleSpinner(string text) {
+            this.text = text;
+            enabled = !Console.IsOutputRedirected;
+            if (enabled) timer = new Timer(Tick, null, 0, 120);
+        }
+        private void Tick(object state) {
+            try {
+                var elapsed = DateTime.UtcNow - started;
+                Console.Write("\r  {0} {1} ({2:mm\\:ss})", frames[index++ % frames.Length], text, elapsed);
+            } catch { }
+        }
+        public void Dispose() {
+            if (!enabled) return;
+            timer.Dispose();
+            try { Console.Write("\r" + new string(' ', Math.Min(Console.BufferWidth - 1, text.Length + 24)) + "\r"); } catch { }
+        }
+    }
+}
+'@
+}
+
+function Invoke-WithSpinner {
+    param([Parameter(Mandatory)][string]$Message, [Parameter(Mandatory)][scriptblock]$Operation)
+    $spinner = [M365LicenseAssessment.ConsoleSpinner]::new($Message)
+    try { & $Operation } finally { $spinner.Dispose() }
+}
+
 function Import-RequiredModule {
     param([Parameter(Mandatory)] [string]$Name)
     if (-not (Get-Module -ListAvailable -Name $Name)) {
@@ -127,21 +166,21 @@ New-Item -ItemType Directory -Path $runPath -Force | Out-Null
 
 $usersUri = "https://graph.microsoft.com/v1.0/users?`$select=id,displayName,userPrincipalName,userType,accountEnabled,assignedLicenses,signInActivity&`$top=999"
 Write-ExecutionStatus 18 'Coletando usuarios e atividade de login...'
-$users = @(Get-GraphCollection $usersUri)
+$users = @(Invoke-WithSpinner 'Consultando diretorio' { Get-GraphCollection $usersUri })
 if (-not $IncludeGuests) { $users = @($users | Where-Object userType -EQ 'Member') }
 Write-ExecutionStatus 25 'Coletando assinaturas e SKUs do tenant...'
-$skus = @(Get-GraphCollection 'https://graph.microsoft.com/v1.0/subscribedSkus')
+$skus = @(Invoke-WithSpinner 'Consultando assinaturas' { Get-GraphCollection 'https://graph.microsoft.com/v1.0/subscribedSkus' })
 
 Write-ExecutionStatus 33 'Coletando atividade geral do Microsoft 365...'
-$activeUsers = @(Get-ReportCsv 'getOffice365ActiveUserDetail' $TelemetryPeriodDays)
+$activeUsers = @(Invoke-WithSpinner 'Baixando atividade geral' { Get-ReportCsv 'getOffice365ActiveUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 41 'Coletando atividade dos aplicativos Office...'
-$appUsers = @(Get-ReportCsv 'getM365AppUserDetail' $TelemetryPeriodDays)
+$appUsers = @(Invoke-WithSpinner 'Baixando atividade do Office' { Get-ReportCsv 'getM365AppUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 49 'Coletando atividade de email...'
-$emailUsers = @(Get-ReportCsv 'getEmailActivityUserDetail' $TelemetryPeriodDays)
+$emailUsers = @(Invoke-WithSpinner 'Baixando atividade de email' { Get-ReportCsv 'getEmailActivityUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 57 'Coletando atividade do OneDrive...'
-$oneDriveUsers = @(Get-ReportCsv 'getOneDriveActivityUserDetail' $TelemetryPeriodDays)
+$oneDriveUsers = @(Invoke-WithSpinner 'Baixando atividade do OneDrive' { Get-ReportCsv 'getOneDriveActivityUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 65 'Coletando atividade do SharePoint...'
-$sharePointUsers = @(Get-ReportCsv 'getSharePointActivityUserDetail' $TelemetryPeriodDays)
+$sharePointUsers = @(Invoke-WithSpinner 'Baixando atividade do SharePoint' { Get-ReportCsv 'getSharePointActivityUserDetail' $TelemetryPeriodDays })
 
 function New-ReportIndex { param([object[]]$Rows)
     $index = @{}
@@ -300,7 +339,9 @@ if ($SendEmail) {
         )
     }; saveToSentItems = $true }
     try {
-        Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/me/sendMail' -Body ($message | ConvertTo-Json -Depth 10) -ContentType 'application/json' | Out-Null
+        Invoke-WithSpinner 'Enviando email' {
+            Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/me/sendMail' -Body ($message | ConvertTo-Json -Depth 10) -ContentType 'application/json' | Out-Null
+        }
     } catch {
         throw "A analise foi gerada, mas o envio falhou. Confirme que '$($context.Account)' possui caixa Exchange Online e consentimento Mail.Send. Detalhe: $($_.Exception.Message)"
     }
