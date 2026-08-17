@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.2.0'
+$solutionVersion = '1.2.1'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -205,7 +205,7 @@ if (-not (Test-Path -LiteralPath $PriceCatalogPath)) { throw "Catalogo nao encon
 $catalogData = Get-Content -LiteralPath $PriceCatalogPath -Raw | ConvertFrom-Json
 $catalog = @($catalogData.plans)
 
-$scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 'Reports.Read.All')
+$scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 'Organization.Read.All', 'Reports.Read.All')
 if ($SendEmail) { $scopes += 'Mail.Send' }
 Write-ExecutionStatus 5 'Aguardando autenticacao no Microsoft 365...'
 Write-Host "M365 License Assessment v$solutionVersion" -ForegroundColor Green
@@ -227,6 +227,9 @@ try {
     }
     Invoke-WithSpinner 'Validando leitura de licencas e SKUs' {
         Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuId,skuPartNumber' | Out-Null
+    }
+    Invoke-WithSpinner 'Validando dados de identificacao do tenant' {
+        Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization?$select=id,displayName,verifiedDomains,tenantType' | Out-Null
     }
     foreach ($probe in @(
         @{Name='atividade geral';Api='getOffice365ActiveUserDetail'},
@@ -250,6 +253,19 @@ try {
 Write-Host 'Pre-validacao concluida com sucesso em todas as APIs.' -ForegroundColor Green
 Write-ExecutionStatus 10 'Iniciando coleta completa; esta etapa pode levar alguns minutos.'
 $now = [datetime]::UtcNow
+$meProfile = Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=id,displayName,userPrincipalName,mail'
+$organization = @(Get-GraphCollection 'https://graph.microsoft.com/v1.0/organization?$select=id,displayName,verifiedDomains,tenantType') | Select-Object -First 1
+$tenantName = Find-PropertyValue $organization @('displayName')
+if (-not $tenantName) { $tenantName = $context.TenantId }
+$verifiedDomainsProperty = $organization.PSObject.Properties['verifiedDomains']
+$verifiedDomains = if ($verifiedDomainsProperty) { @($verifiedDomainsProperty.Value) } else { @() }
+$defaultDomainObject = $verifiedDomains | Where-Object isDefault | Select-Object -First 1
+if (-not $defaultDomainObject) { $defaultDomainObject = $verifiedDomains | Select-Object -First 1 }
+$defaultDomain = if ($defaultDomainObject) { Find-PropertyValue $defaultDomainObject @('name') } else { 'Nao informado' }
+$tenantType = Find-PropertyValue $organization @('tenantType')
+if (-not $tenantType) { $tenantType = 'Nao informado' }
+$operatorName = Find-PropertyValue $meProfile @('displayName')
+if (-not $operatorName) { $operatorName = $context.Account }
 $runId = $now.ToString('yyyyMMdd-HHmmss')
 $runPath = Join-Path $OutputPath $runId
 New-Item -ItemType Directory -Path $runPath -Force | Out-Null
@@ -362,7 +378,9 @@ $csvPath = Join-Path $runPath 'analise-usuarios.csv'
 Write-ExecutionStatus 82 'Gerando relatorio executivo e anexos...'
 $results | Sort-Object UPN | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding utf8BOM
 $summary = [pscustomobject]@{
-    generatedAtUtc = $now.ToString('o'); tenantId = $context.TenantId; account = $context.Account
+    generatedAtUtc = $now.ToString('o'); solutionVersion = $solutionVersion
+    tenantId = $context.TenantId; tenantName = $tenantName; defaultDomain = $defaultDomain
+    generatedByName = $operatorName; generatedByAccount = $context.Account
     telemetryPeriodDays = $TelemetryPeriodDays; usersAnalyzed = @($results).Count
     licensedUsers = @($results | Where-Object LicencasAtuais).Count
     removalCandidates = @($results | Where-Object { $_.Recomendacao -like 'Candidato a remocao*' }).Count
@@ -452,8 +470,10 @@ $rowsHtml = ($results | Sort-Object EconomiaMensalEstimadaBRL -Descending | Sele
     ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
 $html = @"
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>
-body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-serif}.page{max-width:1180px;margin:auto;background:#fff}.hero{padding:30px 34px;background:linear-gradient(135deg,#073b70,#0f6cbd);color:#fff}.hero h1{margin:0 0 8px;font-size:27px}.hero p{margin:3px 0;color:#dbeafe}.content{padding:26px 34px}.cards{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 26px}.card{min-width:180px;flex:1;padding:17px;border:1px solid #dbe3ee;border-radius:10px;background:#fff;box-shadow:0 2px 8px #0000000d}.card .value{font-size:25px;font-weight:700;color:#0f6cbd}.card .label{color:#64748b;margin-top:5px}.saving .value{color:#107c10}h2{margin-top:28px;color:#073b70;border-bottom:2px solid #dbeafe;padding-bottom:8px}table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;border:1px solid #dbe3ee;border-radius:8px;overflow:hidden}th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#0f6cbd;color:#fff;white-space:nowrap}tr:nth-child(even) td{background:#f8fafc}.note{background:#fff8db;border-left:5px solid #f2c811;padding:14px 16px;border-radius:4px}.good{background:#e8f5e9;border-left:5px solid #107c10;padding:14px 16px}.footer{margin-top:28px;padding-top:15px;border-top:1px solid #ddd;color:#64748b;font-size:12px}.table-wrap{overflow-x:auto}@media(max-width:700px){.content,.hero{padding:20px}.cards{display:block}.card{margin-bottom:10px}}
-</style></head><body><div class="page"><div class="hero"><h1>Avaliacao de licencas Microsoft 365</h1><p>Resumo executivo de utilizacao e oportunidades de otimizacao</p><p>Tenant $($context.TenantId) &bull; $($now.ToString('dd/MM/yyyy HH:mm')) UTC &bull; janela de $TelemetryPeriodDays dias</p></div><div class="content">
+body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-serif}.page{max-width:1180px;margin:auto;background:#fff}.hero{padding:30px 34px;background:linear-gradient(135deg,#073b70,#0f6cbd);color:#fff}.hero h1{margin:0 0 8px;font-size:27px}.hero p{margin:3px 0;color:#dbeafe}.content{padding:26px 34px}.cards{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 26px}.card{min-width:180px;flex:1;padding:17px;border:1px solid #dbe3ee;border-radius:10px;background:#fff;box-shadow:0 2px 8px #0000000d}.card .value{font-size:25px;font-weight:700;color:#0f6cbd}.card .label{color:#64748b;margin-top:5px}.saving .value{color:#107c10}h2{margin-top:28px;color:#073b70;border-bottom:2px solid #dbeafe;padding-bottom:8px}table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;border:1px solid #dbe3ee;border-radius:8px;overflow:hidden}th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#0f6cbd;color:#fff;white-space:nowrap}tr:nth-child(even) td{background:#f8fafc}.note{background:#fff8db;border-left:5px solid #f2c811;padding:14px 16px;border-radius:4px}.good{background:#e8f5e9;border-left:5px solid #107c10;padding:14px 16px}.cta{margin:18px 0 26px;padding:18px 20px;background:#eef6ff;border:1px solid #b7d7f5;border-radius:10px}.cta strong{display:block;color:#073b70;font-size:16px;margin-bottom:6px}.cta a{display:inline-block;margin:8px 10px 0 0;padding:8px 13px;background:#0f6cbd;color:#fff;text-decoration:none;border-radius:5px}.cta a.whatsapp{background:#107c10}.footer{margin-top:28px;padding-top:15px;border-top:1px solid #ddd;color:#64748b;font-size:12px}.table-wrap{overflow-x:auto}@media(max-width:700px){.content,.hero{padding:20px}.cards{display:block}.card{margin-bottom:10px}}
+</style></head><body><div class="page"><div class="hero"><h1>Avaliacao de licencas Microsoft 365</h1><p>Resumo executivo de utilizacao e oportunidades de otimizacao</p><p>$tenantName &bull; $($now.ToString('dd/MM/yyyy HH:mm')) UTC &bull; janela de $TelemetryPeriodDays dias</p></div><div class="content">
+<h2>Identificacao do relatorio</h2><table><tr><th>Organizacao</th><td>$tenantName</td><th>Dominio padrao</th><td>$defaultDomain</td></tr><tr><th>Tenant ID</th><td>$($context.TenantId)</td><th>Tipo de tenant</th><td>$tenantType</td></tr><tr><th>Gerado por</th><td>$operatorName</td><th>Conta autenticada</th><td>$($context.Account)</td></tr><tr><th>Data de geracao</th><td>$($now.ToString('dd/MM/yyyy HH:mm')) UTC</td><th>Ferramenta</th><td>M365 License Assessment v$solutionVersion</td></tr></table>
+<div class="cta"><strong>Transforme os sinais deste relatorio em um plano seguro de otimizacao.</strong>Esta avaliacao automatizada e um ponto de partida. Para aprofundar licenciamento, seguranca, conformidade e economia com validacao do contexto de cada usuario, conte com a equipe BestSoft.<br><a href="https://www.bestsoft.com.br/">Conheca a BestSoft</a><a class="whatsapp" href="https://wa.me/555130265338">WhatsApp (51) 3026-5338</a></div>
 <div class="cards"><div class="card"><div class="value">$(@($results).Count)</div><div class="label">Usuarios analisados</div></div><div class="card"><div class="value">$($summary.sharedMailboxCandidates)</div><div class="label">Candidatos a caixa compartilhada</div></div><div class="card"><div class="value">$($summary.removalCandidates)</div><div class="label">Candidatos a remocao</div></div><div class="card saving"><div class="value">R$ $($summary.estimatedMonthlySavingsBRL.ToString('N2'))</div><div class="label">Economia mensal estimada</div></div></div>
 <div class="good"><b>Objetivo:</b> priorizar oportunidades de economia sem executar qualquer alteracao automatica no tenant. O CSV anexo contem todos os usuarios e campos da analise.</div>
 <h2>Janela de inatividade por servico</h2><p>O quadro abaixo permite separar oportunidades recentes (mais de 30 dias) das mais consolidadas (mais de 90 dias).</p><div class="table-wrap">$inactivityHtml</div>
@@ -479,7 +499,7 @@ if ($SendEmail) {
             }
         } finally { $archive.Dispose() }
         $zipBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($zipPath))
-        $message = @{ message = @{ subject = 'Avaliacao de licencas Microsoft 365'; body = @{ contentType='HTML'; content=$html }
+        $message = @{ message = @{ subject = "Avaliacao de licencas Microsoft 365 - $tenantName"; body = @{ contentType='HTML'; content=$html }
             toRecipients = @(@{emailAddress=@{address=$EmailTo}})
             bccRecipients = @(@{emailAddress=@{address=$BccAddress}})
             attachments = @(@{'@odata.type'='#microsoft.graph.fileAttachment';name='relatorio-m365-completo.zip';contentType='application/zip';contentBytes=$zipBytes})

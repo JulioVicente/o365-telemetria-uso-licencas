@@ -2,6 +2,8 @@
 
 PowerShell para autenticar interativamente em um tenant, coletar usuarios, licencas e relatorios de uso do Microsoft Graph e gerar uma analise de reducao. O script **nao altera licencas**.
 
+O relatorio identifica no preambulo a organizacao, Tenant ID, dominio padrao, usuario/conta que executou, data UTC, janela analisada e versao da ferramenta. A permissao `Organization.Read.All` e usada somente para ler esses dados de identificacao.
+
 ## Instalacao guiada
 
 O processo segue o mesmo padrao do projeto `sharepoint-version-cleanup`: instalador auditavel, suporte a `-WhatIf`, instalacao em `%ProgramData%`, configuracao interativa e rollback local em caso de falha.
