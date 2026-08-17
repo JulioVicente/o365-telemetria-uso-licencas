@@ -25,15 +25,6 @@ function Read-Default([string]$Prompt, [string]$Default) {
     if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
     return $answer
 }
-function Read-EmailAddress([string]$Prompt, [string]$Default) {
-    do {
-        $value = Read-Default $Prompt $Default
-        $parsed = $null
-        $valid = [System.Net.Mail.MailAddress]::TryCreate($value, [ref]$parsed) -and $parsed.Address -eq $value
-        if (-not $valid) { Write-Warning 'Informe um endereco de email valido.' }
-    } while (-not $valid)
-    return $parsed.Address
-}
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -88,11 +79,8 @@ try {
     }
 
     Write-Step 'Configuracao interativa'
-    Write-Host 'A conta remetente deve possuir caixa Exchange Online e consentir com Mail.Send.' -ForegroundColor Yellow
-    $senderAccount = Read-EmailAddress 'Conta Microsoft 365 que fara login e enviara o relatorio' ''
-    $emailTo = Read-EmailAddress 'Destinatario do relatorio' $senderAccount
-    $bcc = Read-EmailAddress 'Copia oculta da BestSoft' 'suprote@bestsoft.com.br'
-    $configuration = [ordered]@{ SchemaVersion=1; SenderAccount=$senderAccount; EmailTo=$emailTo; BccAddress=$bcc; TelemetryPeriodDays=180 }
+    Write-Host 'A conta autenticada deve possuir caixa Exchange Online e consentir com Mail.Send.' -ForegroundColor Yellow
+    $configuration = [ordered]@{ SchemaVersion=1; BccAddress='suprote@bestsoft.com.br'; TelemetryPeriodDays=180 }
     $configPath = Join-Path $InstallPath 'config\settings.json'
     if ($PSCmdlet.ShouldProcess($configPath, 'Gravar configuracao')) {
         $configuration | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding utf8
@@ -103,7 +91,7 @@ try {
 #requires -Version 7.2
 [CmdletBinding()] param()
 $settings = Get-Content (Join-Path $PSScriptRoot 'config\settings.json') -Raw | ConvertFrom-Json
-$arguments = @{ OutputPath=(Join-Path $PSScriptRoot 'output'); TelemetryPeriodDays=[int]$settings.TelemetryPeriodDays; ExpectedSenderAccount=$settings.SenderAccount; EmailTo=$settings.EmailTo; BccAddress=$settings.BccAddress; SendEmail=$true }
+$arguments = @{ OutputPath=(Join-Path $PSScriptRoot 'output'); TelemetryPeriodDays=[int]$settings.TelemetryPeriodDays; BccAddress=$settings.BccAddress; SendEmail=$true }
 & (Join-Path $PSScriptRoot 'Invoke-M365LicenseAssessment.ps1') @arguments
 '@
     if ($PSCmdlet.ShouldProcess($runner, 'Criar comando simplificado de execucao')) {
@@ -114,7 +102,7 @@ $arguments = @{ OutputPath=(Join-Path $PSScriptRoot 'output'); TelemetryPeriodDa
     Write-Host "Executar: pwsh -NoProfile -File `"$runner`""
     if (-not $WhatIfPreference) {
         Write-Step 'Validando login, coleta e envio do relatorio'
-        Write-Host "Autentique-se como $senderAccount. A instalacao so termina se a coleta e o envio funcionarem." -ForegroundColor Yellow
+        Write-Host 'Autentique-se com a conta que enviara e recebera o relatorio. A instalacao so termina se a coleta e o envio funcionarem.' -ForegroundColor Yellow
         & $runner
         Write-Host 'Validacao concluida: coleta executada e email aceito pelo Microsoft Graph.' -ForegroundColor Green
     }

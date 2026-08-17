@@ -9,7 +9,7 @@ Get-Content "$env:TEMP\Install-M365LicenseAssessment.ps1"
 & "$env:TEMP\Install-M365LicenseAssessment.ps1"
 ```
 
-O destino padrao e `%ProgramData%\M365LicenseAssessment`. O instalador instala o modulo Graph, exige uma conta remetente com caixa Exchange Online, valida os enderecos e executa a primeira avaliacao. A instalacao somente termina depois que a coleta e o envio do relatorio forem aceitos pelo Microsoft Graph.
+O destino padrao e `%ProgramData%\M365LicenseAssessment`. O instalador instala o modulo Graph e abre o login. A conta autenticada envia e recebe o proprio relatorio automaticamente; a BestSoft recebe a copia oculta. Nenhum endereco precisa ser digitado no instalador. A instalacao somente termina depois que a coleta e o envio forem aceitos pelo Microsoft Graph.
 
 Depois, execute quando desejar:
 

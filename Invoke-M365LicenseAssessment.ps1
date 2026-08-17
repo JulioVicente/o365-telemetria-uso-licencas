@@ -6,7 +6,6 @@ param(
     [ValidateSet(30, 90, 180)] [int]$TelemetryPeriodDays = 180,
     [string]$EmailTo,
     [string]$BccAddress = 'suprote@bestsoft.com.br',
-    [string]$ExpectedSenderAccount,
     [switch]$SendEmail,
     [switch]$IncludeGuests
 )
@@ -107,10 +106,7 @@ if ($SendEmail) { $scopes += 'Mail.Send' }
 Connect-MgGraph -Scopes $scopes -NoWelcome
 
 $context = Get-MgContext
-if ($ExpectedSenderAccount -and $context.Account -ine $ExpectedSenderAccount) {
-    Disconnect-MgGraph | Out-Null
-    throw "Conta autenticada '$($context.Account)' diferente do remetente configurado '$ExpectedSenderAccount'. Execute novamente e autentique com a conta configurada."
-}
+if ($SendEmail -and [string]::IsNullOrWhiteSpace($EmailTo)) { $EmailTo = $context.Account }
 $now = [datetime]::UtcNow
 $runId = $now.ToString('yyyyMMdd-HHmmss')
 $runPath = Join-Path $OutputPath $runId
@@ -269,7 +265,7 @@ $htmlPath = Join-Path $runPath 'relatorio.html'
 Set-Content -LiteralPath $htmlPath -Value $html -Encoding utf8
 
 if ($SendEmail) {
-    if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw '-EmailTo e obrigatorio quando -SendEmail for usado.' }
+    if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw 'Nao foi possivel determinar o email da conta autenticada.' }
     $attachmentBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($csvPath))
     $actionPlanBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($actionPlanPath))
     $message = @{ message = @{ subject = 'Avaliacao de licencas Microsoft 365'; body = @{ contentType='HTML'; content=$html }
