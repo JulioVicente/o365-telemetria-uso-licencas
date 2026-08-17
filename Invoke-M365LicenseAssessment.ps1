@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.0.7'
+$solutionVersion = '1.1.0'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -60,6 +60,34 @@ function Invoke-WithSpinner {
     try { & $Operation } finally { $spinner.Dispose() }
 }
 
+function Invoke-GraphRequestWithRetry {
+    param(
+        [Parameter(Mandatory)][ValidateSet('GET','POST')][string]$Method,
+        [Parameter(Mandatory)][string]$Uri,
+        [object]$Body,
+        [string]$OutputFilePath,
+        [string]$ContentType,
+        [int]$MaxAttempts = 4
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            $parameters = @{ Method=$Method; Uri=$Uri }
+            if ($PSBoundParameters.ContainsKey('Body')) { $parameters.Body = $Body }
+            if ($OutputFilePath) { $parameters.OutputFilePath = $OutputFilePath }
+            else { $parameters.OutputType = 'PSObject' }
+            if ($ContentType) { $parameters.ContentType = $ContentType }
+            return Invoke-MgGraphRequest @parameters
+        } catch {
+            $message = $_.Exception.Message
+            $isTransient = $message -match '(429|TooManyRequests|throttl|500|502|503|504|InternalServerError|BadGateway|ServiceUnavailable|GatewayTimeout|temporar)'
+            if (-not $isTransient -or $attempt -eq $MaxAttempts) { throw }
+            $delay = [math]::Min(30, [math]::Pow(2, $attempt))
+            Write-Warning "Falha transitoria do Microsoft Graph (tentativa $attempt/$MaxAttempts). Nova tentativa em $delay segundos."
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 function Import-RequiredModule {
     param([Parameter(Mandatory)] [string]$Name)
     if (-not (Get-Module -ListAvailable -Name $Name)) {
@@ -72,7 +100,7 @@ function Get-GraphCollection {
     param([Parameter(Mandatory)] [string]$Uri)
     $items = [System.Collections.Generic.List[object]]::new()
     while ($Uri) {
-        $response = Invoke-MgGraphRequest -Method GET -Uri $Uri -OutputType PSObject
+        $response = Invoke-GraphRequestWithRetry -Method GET -Uri $Uri
         if ($null -ne $response.value) { foreach ($item in $response.value) { $items.Add($item) } }
         else { $items.Add($response); break }
         $nextLinkProperty = $response.PSObject.Properties['@odata.nextLink']
@@ -86,7 +114,7 @@ function Get-ReportCsv {
     $tempFile = Join-Path ([IO.Path]::GetTempPath()) ("m365-{0}-{1}.csv" -f $ReportName, [guid]::NewGuid())
     try {
         $uri = "https://graph.microsoft.com/v1.0/reports/$ReportName(period='D$PeriodDays')"
-        Invoke-MgGraphRequest -Method GET -Uri $uri -OutputFilePath $tempFile | Out-Null
+        Invoke-GraphRequestWithRetry -Method GET -Uri $uri -OutputFilePath $tempFile | Out-Null
         if ((Test-Path $tempFile) -and (Get-Item $tempFile).Length -gt 0) {
             return @(Import-Csv -LiteralPath $tempFile)
         }
@@ -172,7 +200,37 @@ if ($ExpectedAccount -and $context.Account -ine $ExpectedAccount) {
     throw "A conta autenticada '$($context.Account)' nao corresponde ao usuario informado '$ExpectedAccount'. Execute novamente e entre com o usuario informado na instalacao."
 }
 if ($SendEmail -and [string]::IsNullOrWhiteSpace($EmailTo)) { $EmailTo = $context.Account }
-Write-ExecutionStatus 10 'Autenticacao concluida. Iniciando coleta; esta etapa pode levar alguns minutos.'
+Write-ExecutionStatus 8 'Autenticacao concluida. Executando validacao minima das APIs...'
+try {
+    Invoke-WithSpinner 'Validando identidade e perfil autenticado' {
+        Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail' | Out-Null
+    }
+    Invoke-WithSpinner 'Validando leitura de usuarios e atividade de login' {
+        Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/users?$top=1&$select=id,signInActivity' | Out-Null
+    }
+    Invoke-WithSpinner 'Validando leitura de licencas e SKUs' {
+        Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuId,skuPartNumber' | Out-Null
+    }
+    foreach ($probe in @(
+        @{Name='atividade geral';Api='getOffice365ActiveUserDetail'},
+        @{Name='aplicativos Office';Api='getM365AppUserDetail'},
+        @{Name='email';Api='getEmailActivityUserDetail'},
+        @{Name='OneDrive';Api='getOneDriveActivityUserDetail'},
+        @{Name='SharePoint';Api='getSharePointActivityUserDetail'}
+    )) {
+        Invoke-WithSpinner "Validando relatorio de $($probe.Name)" { Get-ReportCsv $probe.Api 7 | Out-Null }
+    }
+    if ($SendEmail) {
+        $validationMessage = @{message=@{subject='Validacao tecnica - M365 License Assessment';body=@{contentType='Text';content='A autenticacao, a caixa Exchange Online e a permissao Mail.Send foram validadas. A analise completa sera iniciada em seguida.'};toRecipients=@(@{emailAddress=@{address=$EmailTo}})};saveToSentItems=$true} | ConvertTo-Json -Depth 8 -Compress
+        Invoke-WithSpinner 'Validando caixa Exchange Online e permissao de envio' {
+            Invoke-GraphRequestWithRetry -Method POST -Uri 'https://graph.microsoft.com/v1.0/me/sendMail' -Body $validationMessage -ContentType 'application/json' | Out-Null
+        }
+    }
+} catch {
+    throw "Pre-validacao interrompida; nenhuma analise foi iniciada. API ou permissao indisponivel: $($_.Exception.Message)"
+}
+Write-Host 'Pre-validacao concluida com sucesso em todas as APIs.' -ForegroundColor Green
+Write-ExecutionStatus 10 'Iniciando coleta completa; esta etapa pode levar alguns minutos.'
 $now = [datetime]::UtcNow
 $runId = $now.ToString('yyyyMMdd-HHmmss')
 $runPath = Join-Path $OutputPath $runId
@@ -324,7 +382,7 @@ $inProgressActions = @($planActions | Where-Object Status -EQ 'Em andamento').Co
 $notAssessedActions = @($planActions | Where-Object Status -Like 'Nao avaliada*').Count
 $actionPlanHtml = ($planActions | ConvertTo-Html -Fragment -Property ID,Pilar,Acao,Prioridade,Responsavel,Status,Evidencia,ProximoPasso,Fonte) -join "`n"
 
-$rowsHtml = ($results | Sort-Object EconomiaMensalEstimadaBRL -Descending | Select-Object -First 500 |
+$rowsHtml = ($results | Sort-Object EconomiaMensalEstimadaBRL -Descending | Select-Object -First 100 |
     ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
 $html = @"
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>
@@ -344,23 +402,28 @@ Set-Content -LiteralPath $htmlPath -Value $html -Encoding utf8
 if ($SendEmail) {
     Write-ExecutionStatus 94 'Enviando relatorio por email...'
     if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw 'Nao foi possivel determinar o email da conta autenticada.' }
-    $attachmentBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($csvPath))
-    $actionPlanBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($actionPlanPath))
-    $message = @{ message = @{ subject = 'Avaliacao de licencas Microsoft 365'; body = @{ contentType='HTML'; content=$html }
-        toRecipients = @(@{emailAddress=@{address=$EmailTo}})
-        bccRecipients = @(@{emailAddress=@{address=$BccAddress}})
-        attachments = @(
-            @{'@odata.type'='#microsoft.graph.fileAttachment';name='analise-usuarios.csv';contentType='text/csv';contentBytes=$attachmentBytes},
-            @{'@odata.type'='#microsoft.graph.fileAttachment';name='plano-acoes.csv';contentType='text/csv';contentBytes=$actionPlanBytes}
-        )
-    }; saveToSentItems = $true }
+    $zipPath = Join-Path ([IO.Path]::GetTempPath()) ("m365-license-report-{0}.zip" -f [guid]::NewGuid())
     try {
+        $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($file in @($csvPath, $actionPlanPath, $htmlPath, (Join-Path $runPath 'resumo.json'))) {
+                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, (Split-Path $file -Leaf), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        } finally { $archive.Dispose() }
+        $zipBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($zipPath))
+        $message = @{ message = @{ subject = 'Avaliacao de licencas Microsoft 365'; body = @{ contentType='HTML'; content=$html }
+            toRecipients = @(@{emailAddress=@{address=$EmailTo}})
+            bccRecipients = @(@{emailAddress=@{address=$BccAddress}})
+            attachments = @(@{'@odata.type'='#microsoft.graph.fileAttachment';name='relatorio-m365-completo.zip';contentType='application/zip';contentBytes=$zipBytes})
+        }; saveToSentItems = $true }
+        $messageJson = $message | ConvertTo-Json -Depth 10 -Compress
+        Write-Host ("  Pacote de envio: {0:N2} MB" -f ([Text.Encoding]::UTF8.GetByteCount($messageJson) / 1MB)) -ForegroundColor DarkGray
         Invoke-WithSpinner 'Enviando email' {
-            Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/me/sendMail' -Body ($message | ConvertTo-Json -Depth 10) -ContentType 'application/json' | Out-Null
+            Invoke-GraphRequestWithRetry -Method POST -Uri 'https://graph.microsoft.com/v1.0/me/sendMail' -Body $messageJson -ContentType 'application/json' | Out-Null
         }
     } catch {
         throw "A analise foi gerada, mas o envio falhou. Confirme que '$($context.Account)' possui caixa Exchange Online e consentimento Mail.Send. Detalhe: $($_.Exception.Message)"
-    }
+    } finally { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
 }
 
 if ($SendEmail) {

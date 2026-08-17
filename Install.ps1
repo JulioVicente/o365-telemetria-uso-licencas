@@ -73,6 +73,25 @@ function Copy-ProjectFiles([string]$Destination) {
     }
 }
 
+function Test-InstalledComponents([string]$Destination) {
+    Write-Step 'Validando componentes e pacotes locais'
+    foreach ($relativePath in $requiredFiles) {
+        $path = Join-Path $Destination ($relativePath -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Componente ausente apos instalacao: $relativePath" }
+    }
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    foreach ($command in 'Connect-MgGraph','Get-MgContext','Invoke-MgGraphRequest','Disconnect-MgGraph') {
+        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { throw "Comando obrigatorio indisponivel: $command" }
+    }
+    $catalogPath = Join-Path $Destination 'config\license-catalog.pt-BR.json'
+    $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+    if (-not $catalog.plans -or @($catalog.plans).Count -eq 0) { throw 'Catalogo de licencas vazio ou invalido.' }
+    $probePath = Join-Path $Destination 'output\.write-test'
+    Set-Content -LiteralPath $probePath -Value 'ok' -Encoding ascii
+    Remove-Item -LiteralPath $probePath -Force
+    Write-Host "Componentes locais validados; $(@($catalog.plans).Count) planos no catalogo." -ForegroundColor Green
+}
+
 $existed = Test-Path -LiteralPath $InstallPath
 $rollback = Join-Path ([IO.Path]::GetTempPath()) ('m365-license-install-' + [guid]::NewGuid().ToString('N'))
 try {
@@ -86,6 +105,7 @@ try {
         }
         foreach ($folder in '', 'config', 'output') { New-Item -ItemType Directory -Path (Join-Path $InstallPath $folder) -Force | Out-Null }
         Copy-ProjectFiles $InstallPath
+        Test-InstalledComponents $InstallPath
     }
 
     Write-Step 'Configuracao interativa'
