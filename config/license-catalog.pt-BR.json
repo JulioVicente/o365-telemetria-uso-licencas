@@ -1,0 +1,16 @@
+{
+  "asOf": "2026-08-17",
+  "currency": "BRL",
+  "billing": "por usuario/mes, compromisso anual",
+  "taxNote": "Consulte a pagina de origem; a exibicao de impostos varia por familia e canal.",
+  "source": "https://www.microsoft.com/pt-br/microsoft-365/business/microsoft-365-plans-and-pricing e https://www.microsoft.com/pt-br/microsoft-365/enterprise/office-365-plans-and-pricing",
+  "plans": [
+    {"name":"Microsoft 365 Business Basic","monthlyPriceBRL":33.40,"recommendable":true,"skuPartNumbers":["O365_BUSINESS_ESSENTIALS"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":false}},
+    {"name":"Microsoft 365 Business Standard","monthlyPriceBRL":80.10,"recommendable":true,"skuPartNumbers":["O365_BUSINESS_PREMIUM"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Microsoft 365 Business Premium","monthlyPriceBRL":126.00,"recommendable":false,"skuPartNumbers":["SPB"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Office 365 E1","monthlyPriceBRL":57.30,"recommendable":true,"skuPartNumbers":["STANDARDPACK"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":false}},
+    {"name":"Office 365 E3","monthlyPriceBRL":131.70,"recommendable":true,"skuPartNumbers":["ENTERPRISEPACK"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Office 365 E5","monthlyPriceBRL":217.60,"recommendable":false,"skuPartNumbers":["ENTERPRISEPREMIUM"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Microsoft 365 Apps para Grandes Empresas","monthlyPriceBRL":68.70,"recommendable":true,"skuPartNumbers":["OFFICESUBSCRIPTION"],"features":{"email":false,"oneDrive":true,"sharePoint":false,"officeWeb":true,"officeDesktop":true}}
+  ]
+}
