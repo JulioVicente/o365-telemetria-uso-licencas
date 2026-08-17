@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.0.6'
+$solutionVersion = '1.0.7'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -117,14 +117,14 @@ function Convert-ToDateOrNull {
 function Get-DaysSince {
     param([Nullable[datetime]]$Date, [datetime]$Now)
     if ($null -eq $Date) { return $null }
-    return [math]::Floor(($Now - $Date.Value).TotalDays)
+    return [math]::Floor(($Now - [datetime]$Date).TotalDays)
 }
 
 function Get-UsageState {
     param([Nullable[int]]$Days)
     if ($null -eq $Days) { return 'Sem atividade observada' }
-    if ($Days.Value -gt 90) { return 'Inativo >90 dias' }
-    if ($Days.Value -gt 30) { return 'Inativo >30 dias' }
+    if ([int]$Days -gt 90) { return 'Inativo >90 dias' }
+    if ([int]$Days -gt 30) { return 'Inativo >30 dias' }
     return 'Ativo <=30 dias'
 }
 
