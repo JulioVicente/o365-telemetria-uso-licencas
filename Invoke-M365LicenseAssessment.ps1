@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.0.5'
+$solutionVersion = '1.0.6'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -128,6 +128,17 @@ function Get-UsageState {
     return 'Ativo <=30 dias'
 }
 
+function Get-DecimalSum {
+    param([object[]]$InputObject, [Parameter(Mandatory)][string]$Property)
+    [decimal]$total = 0
+    foreach ($item in @($InputObject)) {
+        if ($null -eq $item) { continue }
+        $valueProperty = $item.PSObject.Properties[$Property]
+        if ($valueProperty -and $null -ne $valueProperty.Value) { $total += [decimal]$valueProperty.Value }
+    }
+    return $total
+}
+
 function Get-MinimumPlan {
     param([hashtable]$Needs, [object[]]$Catalog)
     if (-not ($Needs.Email -or $Needs.OneDrive -or $Needs.SharePoint -or $Needs.OfficeWeb -or $Needs.OfficeDesktop)) {
@@ -221,7 +232,7 @@ $results = foreach ($user in $users) {
 
     $assignedParts = @($user.assignedLicenses | ForEach-Object { $skuById[[string]$_.skuId].skuPartNumber } | Where-Object { $_ })
     $knownCurrentPlans = @($assignedParts | ForEach-Object { $priceBySku[$_] } | Where-Object { $_ } | Sort-Object name -Unique)
-    $currentPrice = ($knownCurrentPlans | Measure-Object monthlyPriceBRL -Sum).Sum
+    $currentPrice = Get-DecimalSum $knownCurrentPlans 'monthlyPriceBRL'
     $unpriced = @($assignedParts | Where-Object { -not $priceBySku.ContainsKey($_) })
     $needs = @{
         Email = ($null -ne $emailDays -and $emailDays -le 90)
@@ -265,7 +276,7 @@ $summary = [pscustomobject]@{
     licensedUsers = @($results | Where-Object LicencasAtuais).Count
     removalCandidates = @($results | Where-Object { $_.Recomendacao -like 'Candidato a remocao*' }).Count
     sharedMailboxCandidates = @($results | Where-Object CandidatoCaixaCompartilhada).Count
-    estimatedMonthlySavingsBRL = [decimal](($results | Measure-Object EconomiaMensalEstimadaBRL -Sum).Sum)
+    estimatedMonthlySavingsBRL = Get-DecimalSum @($results) 'EconomiaMensalEstimadaBRL'
     priceCatalogAsOf = $catalogData.asOf; priceSource = $catalogData.source
 }
 $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runPath 'resumo.json') -Encoding utf8
