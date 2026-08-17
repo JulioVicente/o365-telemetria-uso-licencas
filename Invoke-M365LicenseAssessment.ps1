@@ -6,6 +6,7 @@ param(
     [ValidateSet(30, 90, 180)] [int]$TelemetryPeriodDays = 180,
     [string]$EmailTo,
     [string]$BccAddress = 'suprote@bestsoft.com.br',
+    [string]$ExpectedAccount,
     [switch]$SendEmail,
     [switch]$IncludeGuests
 )
@@ -106,6 +107,10 @@ if ($SendEmail) { $scopes += 'Mail.Send' }
 Connect-MgGraph -Scopes $scopes -NoWelcome
 
 $context = Get-MgContext
+if ($ExpectedAccount -and $context.Account -ine $ExpectedAccount) {
+    Disconnect-MgGraph | Out-Null
+    throw "A conta autenticada '$($context.Account)' nao corresponde ao usuario informado '$ExpectedAccount'. Execute novamente e entre com o usuario informado na instalacao."
+}
 if ($SendEmail -and [string]::IsNullOrWhiteSpace($EmailTo)) { $EmailTo = $context.Account }
 $now = [datetime]::UtcNow
 $runId = $now.ToString('yyyyMMdd-HHmmss')

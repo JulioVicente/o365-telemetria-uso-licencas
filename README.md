@@ -33,7 +33,7 @@ Na primeira execucao, o administrador deve consentir com `User.Read.All`, `Audit
 pwsh ./Invoke-M365LicenseAssessment.ps1
 ```
 
-Na instalacao guiada, nenhum endereco e solicitado. A conta autenticada no Microsoft Graph e usada automaticamente como remetente e destinatario, deve possuir caixa Exchange Online e consentir com `Mail.Send`. O instalador somente conclui depois que o Graph aceitar o envio para a propria conta e a copia oculta para `suprote@bestsoft.com.br`.
+Na instalacao guiada, e solicitado somente o e-mail do usuario que concedera as permissoes e recebera o relatorio. Nao existe pergunta separada sobre remetente: o envio ocorre pela propria conta autenticada no Microsoft Graph. O instalador valida que o login corresponde ao usuario informado e somente conclui depois que o Graph aceitar o envio e a copia oculta para `suprote@bestsoft.com.br`.
 
 Para uma execucao avulsa do script principal:
 
