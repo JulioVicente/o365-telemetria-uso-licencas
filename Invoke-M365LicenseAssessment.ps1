@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.0.4'
+$solutionVersion = '1.0.5'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -206,8 +206,10 @@ $results = foreach ($user in $users) {
     $key = [string]$user.userPrincipalName.ToLowerInvariant()
     $active = $activeIndex[$key]; $apps = $appIndex[$key]; $email = $emailIndex[$key]
     $drive = $oneDriveIndex[$key]; $site = $sharePointIndex[$key]
-    $signInDate = Convert-ToDateOrNull $user.signInActivity.lastSuccessfulSignInDateTime
-    if ($null -eq $signInDate) { $signInDate = Convert-ToDateOrNull $user.signInActivity.lastSignInDateTime }
+    $signInActivityProperty = $user.PSObject.Properties['signInActivity']
+    $signInActivity = if ($signInActivityProperty) { $signInActivityProperty.Value } else { $null }
+    $signInDate = Convert-ToDateOrNull (Find-PropertyValue $signInActivity @('lastSuccessfulSignInDateTime'))
+    if ($null -eq $signInDate) { $signInDate = Convert-ToDateOrNull (Find-PropertyValue $signInActivity @('lastSignInDateTime')) }
     $emailDate = Convert-ToDateOrNull (Find-PropertyValue $email @('Last Activity Date'))
     $driveDate = Convert-ToDateOrNull (Find-PropertyValue $drive @('Last Activity Date'))
     $siteDate = Convert-ToDateOrNull (Find-PropertyValue $site @('Last Activity Date'))
