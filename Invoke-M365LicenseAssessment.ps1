@@ -635,8 +635,15 @@ try {
 if ($SendEmail) {
     Write-ExecutionStatus 94 'Enviando relatorio por email...'
     if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw 'Nao foi possivel determinar o email da conta autenticada.' }
+    $emailZipPath = Join-Path ([IO.Path]::GetTempPath()) ("m365-license-email-{0}.zip" -f [guid]::NewGuid())
     try {
-        $zipBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($zipPath))
+        $emailArchive = [IO.Compression.ZipFile]::Open($emailZipPath, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($file in $filesToArchive) {
+                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($emailArchive, $file, (Split-Path $file -Leaf), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        } finally { $emailArchive.Dispose() }
+        $zipBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($emailZipPath))
         $message = @{ message = @{ subject = "Avaliacao de licencas Microsoft 365 - $tenantName"; body = @{ contentType='HTML'; content=$html }
             toRecipients = @(@{emailAddress=@{address=$EmailTo}})
             bccRecipients = @(@{emailAddress=@{address=$BccAddress}})
@@ -649,7 +656,7 @@ if ($SendEmail) {
         }
     } catch {
         throw "A analise foi gerada, mas o envio falhou. Confirme que '$($context.Account)' possui caixa Exchange Online e consentimento Mail.Send. Detalhe: $($_.Exception.Message)"
-    }
+    } finally { Remove-Item -LiteralPath $emailZipPath -Force -ErrorAction SilentlyContinue }
 }
 
 if ($SendEmail) {

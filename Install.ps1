@@ -94,6 +94,10 @@ function Test-InstalledComponents([string]$Destination) {
     foreach ($command in 'Connect-MgGraph','Get-MgContext','Invoke-MgGraphRequest','Disconnect-MgGraph') {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { throw "Comando obrigatorio indisponivel: $command" }
     }
+    $sevenZip = @('C:\Program Files\7-Zip\7z.exe','C:\Program Files (x86)\7-Zip\7z.exe') |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $sevenZip) { throw '7-Zip nao encontrado apos a instalacao.' }
+    Write-Host "7-Zip validado em: $sevenZip" -ForegroundColor Green
     $catalogPath = Join-Path $Destination 'config\license-catalog.pt-BR.json'
     $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
     if (-not $catalog.plans -or @($catalog.plans).Count -eq 0) { throw 'Catalogo de licencas vazio ou invalido.' }

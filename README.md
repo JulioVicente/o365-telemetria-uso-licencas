@@ -27,7 +27,7 @@ Depois da instalação, as próximas avaliações podem ser iniciadas com:
 - PowerShell 7.2 ou superior.
 - Uma conta corporativa com acesso aos relatorios e leitura do diretorio.
 - Modulo `Microsoft.Graph.Authentication`.
-- 7-Zip para gerar o pacote protegido; o instalador o provisiona via `winget` quando necessario.
+- 7-Zip para gerar o pacote local protegido. O instalador verifica o executavel e, quando necessario, provisiona o 7-Zip via `winget`; a instalacao falha de forma explicita se o requisito continuar indisponivel.
 
 ```powershell
 Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
@@ -51,7 +51,7 @@ pwsh ./Invoke-M365LicenseAssessment.ps1 -SendEmail:$false
 
 Para alterar excepcionalmente a copia oculta, use `-BccAddress outro-endereco@dominio.com`.
 
-Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv`, `planos-assinaturas.csv`, `resumo.json` e `relatorio-m365-completo.zip`. O ZIP usa criptografia AES-256 e a senha `bestsoft`; ele permanece no diretorio e e o arquivo anexado ao e-mail.
+Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv`, `planos-assinaturas.csv`, `resumo.json` e `relatorio-m365-completo.zip`. O ZIP local usa criptografia AES-256 e a senha `bestsoft`. Para facilitar a abertura pelo destinatario, o anexo de e-mail e um ZIP temporario sem senha, apagado da maquina logo apos o envio.
 
 ## Criterios e limites
 
