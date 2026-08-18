@@ -1,4 +1,3 @@
-#requires -Version 7.2
 <#
 .SYNOPSIS
 Instala e configura o M365 License Assessment.
@@ -12,6 +11,44 @@ param(
     [string]$RepositoryRawUrl = 'https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main',
     [switch]$SkipModuleInstall
 )
+
+# Bootstrap compativel com o Windows PowerShell 5.1. O restante da instalacao
+# sempre e executado no PowerShell 7.2 ou superior.
+if ($PSVersionTable.PSVersion -lt [version]'7.2') {
+    Write-Host 'PowerShell 7.2 ou superior nao encontrado. Preparando a instalacao automatica...' -ForegroundColor Yellow
+    $pwshPath = @(
+        (Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+        'C:\Program Files\PowerShell\7\pwsh.exe'
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+
+    if (-not $pwshPath) {
+        $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+        if (-not $winget) {
+            throw 'PowerShell 7.2 ou superior e necessario e o winget nao esta disponivel para instala-lo automaticamente. Instale o PowerShell 7 em https://aka.ms/powershell-release?tag=stable e execute novamente.'
+        }
+        Write-Host 'Instalando o PowerShell 7 via winget...' -ForegroundColor Cyan
+        & $winget.Source install --id Microsoft.PowerShell --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar o PowerShell 7 via winget (codigo $LASTEXITCODE)." }
+        $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+        if (-not (Test-Path -LiteralPath $pwshPath -PathType Leaf)) {
+            throw 'O winget concluiu, mas o executavel do PowerShell 7 nao foi localizado. Abra uma nova janela e execute o instalador novamente.'
+        }
+    }
+
+    $bootstrapPath = Join-Path ([IO.Path]::GetTempPath()) ('Install-M365LicenseAssessment-' + [guid]::NewGuid().ToString('N') + '.ps1')
+    try {
+        $cacheKey = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Invoke-WebRequest -UseBasicParsing -Uri "$($RepositoryRawUrl.TrimEnd('/'))/Install.ps1?nocache=$cacheKey" -OutFile $bootstrapPath
+        $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$bootstrapPath,'-InstallPath',$InstallPath,'-RepositoryRawUrl',$RepositoryRawUrl)
+        if ($SkipModuleInstall) { $arguments += '-SkipModuleInstall' }
+        Write-Host 'Continuando automaticamente no PowerShell 7...' -ForegroundColor Green
+        & $pwshPath @arguments
+        if ($LASTEXITCODE -ne 0) { throw "A instalacao no PowerShell 7 terminou com codigo $LASTEXITCODE." }
+    } finally {
+        Remove-Item -LiteralPath $bootstrapPath -Force -ErrorAction SilentlyContinue
+    }
+    return
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

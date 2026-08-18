@@ -6,13 +6,13 @@ O relatorio identifica no preambulo a organizacao, Tenant ID, dominio padrao, us
 
 ## Instalacao rapida
 
-Abra o PowerShell 7 como administrador e execute:
+Abra o PowerShell como administrador e execute:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main/Install.ps1 | iex
 ```
 
-O instalador baixa os componentes publicados, instala em `%ProgramData%\M365LicenseAssessment`, solicita o e-mail da conta que fará a autenticação e executa a primeira avaliação. O processo possui validação dos componentes e rollback local em caso de falha.
+O instalador baixa os componentes publicados, instala em `%ProgramData%\M365LicenseAssessment`, solicita o e-mail da conta que fará a autenticação e executa a primeira avaliação. Se for iniciado no Windows PowerShell 5.1, ele instala o PowerShell 7 via `winget` e continua automaticamente na versão correta. O processo possui validação dos componentes e rollback local em caso de falha.
 
 Para inspecionar ou simular o instalador antes da execução, use o procedimento auditável descrito no [QUICK_START.md](QUICK_START.md).
 
@@ -24,7 +24,8 @@ Depois da instalação, as próximas avaliações podem ser iniciadas com:
 
 ## Requisitos
 
-- PowerShell 7.2 ou superior.
+- Windows PowerShell 5.1 ou PowerShell 7.2+. Quando necessario, o instalador provisiona automaticamente o PowerShell 7 via `winget`.
+- `winget` disponivel quando o PowerShell 7 ainda nao estiver instalado.
 - Uma conta corporativa com acesso aos relatorios e leitura do diretorio.
 - Modulo `Microsoft.Graph.Authentication`.
 - 7-Zip para gerar o pacote local protegido. O instalador verifica o executavel e, quando necessario, provisiona o 7-Zip via `winget`; a instalacao falha de forma explicita se o requisito continuar indisponivel.

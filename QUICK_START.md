@@ -2,13 +2,13 @@
 
 ## Instalacao em um comando
 
-Abra o PowerShell 7 como administrador e execute:
+Abra o PowerShell como administrador e execute:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main/Install.ps1 | iex
 ```
 
-O comando baixa e executa o instalador publicado na branch `main`. Ele instala os componentes, solicita o e-mail da conta de autenticação, coleta a telemetria e envia o relatório para essa mesma conta, com cópia oculta para `suporte@bestsoft.com.br`.
+O comando baixa e executa o instalador publicado na branch `main`. Se a sessao atual for Windows PowerShell 5.1, o instalador provisiona o PowerShell 7 via `winget` e continua automaticamente. Depois instala os componentes, solicita o e-mail da conta de autenticação, coleta a telemetria e envia o relatório para essa mesma conta, com cópia oculta para `suporte@bestsoft.com.br`.
 
 ## Opcao auditavel
 
