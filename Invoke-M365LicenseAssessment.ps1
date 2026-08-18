@@ -7,13 +7,13 @@ param(
     [string]$EmailTo,
     [string]$BccAddress = 'suprote@bestsoft.com.br',
     [string]$ExpectedAccount,
-    [switch]$SendEmail,
+    [switch]$SendEmail = $true,
     [switch]$IncludeGuests
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.2.1'
+$solutionVersion = '1.3.0'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -123,6 +123,18 @@ function Get-ReportCsv {
     finally { Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue }
 }
 
+function Get-CopilotReportCsv {
+    param([Parameter(Mandatory)] [int]$PeriodDays)
+    $tempFile = Join-Path ([IO.Path]::GetTempPath()) ("m365-copilot-{0}.csv" -f [guid]::NewGuid())
+    try {
+        $uri = "https://graph.microsoft.com/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D$PeriodDays',version='v1')"
+        Invoke-GraphRequestWithRetry -Method GET -Uri $uri -OutputFilePath $tempFile | Out-Null
+        if ((Test-Path $tempFile) -and (Get-Item $tempFile).Length -gt 0) { return @(Import-Csv -LiteralPath $tempFile) }
+        return @()
+    }
+    finally { Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue }
+}
+
 function Find-PropertyValue {
     param([object]$Object, [string[]]$Names)
     if ($null -eq $Object) { return $null }
@@ -216,7 +228,12 @@ if ($ExpectedAccount -and $context.Account -ine $ExpectedAccount) {
     Disconnect-MgGraph | Out-Null
     throw "A conta autenticada '$($context.Account)' nao corresponde ao usuario informado '$ExpectedAccount'. Execute novamente e entre com o usuario informado na instalacao."
 }
-if ($SendEmail -and [string]::IsNullOrWhiteSpace($EmailTo)) { $EmailTo = $context.Account }
+if ($SendEmail) {
+    if ($EmailTo -and $EmailTo -ine $context.Account) {
+        Write-Warning "O destinatario '$EmailTo' foi substituido pela conta autenticada '$($context.Account)'."
+    }
+    $EmailTo = $context.Account
+}
 Write-ExecutionStatus 8 'Autenticacao concluida. Executando validacao minima das APIs...'
 try {
     Invoke-WithSpinner 'Validando identidade e perfil autenticado' {
@@ -289,6 +306,13 @@ Write-ExecutionStatus 65 'Coletando atividade do SharePoint...'
 $sharePointUsers = @(Invoke-WithSpinner 'Baixando atividade do SharePoint' { Get-ReportCsv 'getSharePointActivityUserDetail' $TelemetryPeriodDays })
 Write-ExecutionStatus 69 'Coletando atividade do Microsoft Teams...'
 $teamsUsers = @(Invoke-WithSpinner 'Baixando atividade do Teams' { Get-ReportCsv 'getTeamsUserActivityUserDetail' $TelemetryPeriodDays })
+Write-ExecutionStatus 70 'Coletando uso do Microsoft 365 Copilot...'
+$copilotReportAvailable = $true
+try { $copilotUsers = @(Invoke-WithSpinner 'Baixando atividade do Copilot' { Get-CopilotReportCsv $TelemetryPeriodDays }) }
+catch {
+    $copilotReportAvailable = $false; $copilotUsers = @()
+    Write-Warning "Nao foi possivel coletar o relatorio de uso do Copilot: $($_.Exception.Message)"
+}
 
 function New-ReportIndex { param([object[]]$Rows)
     $index = @{}
@@ -304,6 +328,7 @@ $emailIndex = New-ReportIndex $emailUsers
 $oneDriveIndex = New-ReportIndex $oneDriveUsers
 $sharePointIndex = New-ReportIndex $sharePointUsers
 $teamsIndex = New-ReportIndex $teamsUsers
+$copilotIndex = New-ReportIndex $copilotUsers
 $skuById = @{}; foreach ($sku in $skus) { $skuById[[string]$sku.skuId] = $sku }
 $priceBySku = @{}; foreach ($plan in $catalog) { foreach ($part in $plan.skuPartNumbers) { $priceBySku[$part] = $plan } }
 
@@ -311,7 +336,7 @@ Write-ExecutionStatus 72 'Consolidando telemetria e avaliando licencas...'
 $results = foreach ($user in $users) {
     $key = [string]$user.userPrincipalName.ToLowerInvariant()
     $active = $activeIndex[$key]; $apps = $appIndex[$key]; $email = $emailIndex[$key]
-    $drive = $oneDriveIndex[$key]; $site = $sharePointIndex[$key]; $teams = $teamsIndex[$key]
+    $drive = $oneDriveIndex[$key]; $site = $sharePointIndex[$key]; $teams = $teamsIndex[$key]; $copilot = $copilotIndex[$key]
     $signInActivityProperty = $user.PSObject.Properties['signInActivity']
     $signInActivity = if ($signInActivityProperty) { $signInActivityProperty.Value } else { $null }
     $signInDate = Convert-ToDateOrNull (Find-PropertyValue $signInActivity @('lastSuccessfulSignInDateTime'))
@@ -322,10 +347,12 @@ $results = foreach ($user in $users) {
     $desktopDate = Convert-ToDateOrNull (Find-PropertyValue $apps @('Last Activity Date', 'Last Activated Date'))
     $webDate = Convert-ToDateOrNull (Find-PropertyValue $active @('Office 365 Last Activity Date', 'Microsoft 365 Apps Last Activity Date'))
     $teamsDate = Convert-ToDateOrNull (Find-PropertyValue $teams @('Last Activity Date'))
+    $copilotDate = Convert-ToDateOrNull (Find-PropertyValue $copilot @('Last Activity Date'))
     $signInDays = Get-DaysSince $signInDate $now; $emailDays = Get-DaysSince $emailDate $now
     $driveDays = Get-DaysSince $driveDate $now; $siteDays = Get-DaysSince $siteDate $now
     $desktopDays = Get-DaysSince $desktopDate $now; $webDays = Get-DaysSince $webDate $now
     $teamsDays = Get-DaysSince $teamsDate $now
+    $copilotDays = Get-DaysSince $copilotDate $now
 
     $assignedParts = @($user.assignedLicenses | ForEach-Object { $skuById[[string]$_.skuId].skuPartNumber } | Where-Object { $_ })
     $knownCurrentPlans = @($assignedParts | ForEach-Object { $priceBySku[$_] } | Where-Object { $_ } | Sort-Object name -Unique)
@@ -345,6 +372,9 @@ $results = foreach ($user in $users) {
     $hasOneDriveLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('ONEDRIVE*','SHAREPOINT*')
     $hasOfficeDesktopLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('OFFICESUBSCRIPTION*','OFFICE_BUSINESS*','OFFICE_PRO_PLUS*')
     $hasOfficeWebLicense = Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('SHAREPOINTWAC*','WACONEDRIVE*','OFFICE_WEB*')
+    $hasCopilotLicense = ($null -ne $copilot) -or
+        (@($assignedParts | Where-Object { $_ -like 'Microsoft_365_Copilot*' }).Count -gt 0) -or
+        (Test-UserServiceEntitlement @($user.assignedLicenses) $skuById @('M365_COPILOT_APPS','M365_COPILOT_BUSINESS_CHAT'))
     $teamsReviewCandidate = $hasTeamsLicense -and ($null -eq $teamsDays -or $teamsDays -gt 30)
     $inactiveForSharedMailbox = (-not [bool]$user.accountEnabled) -or ($null -ne $signInDays -and $signInDays -gt 90)
     $sharedMailboxCandidate = $hasExchangeLicense -and $inactiveForSharedMailbox
@@ -367,6 +397,10 @@ $results = foreach ($user in $users) {
         OfficeWebLicenciado = $hasOfficeWebLicense; UltimoOfficeWeb = $webDate; DiasSemOfficeWeb = $webDays; StatusOfficeWeb = Get-UsageState $webDays; CandidatoRevisaoOfficeWeb = ($hasOfficeWebLicense -and ($null -eq $webDays -or $webDays -gt 30))
         TeamsLicenciado = $hasTeamsLicense; UltimoTeams = $teamsDate; DiasSemTeams = $teamsDays; StatusTeams = Get-UsageState $teamsDays
         CandidatoRevisaoTeams = $teamsReviewCandidate
+        CopilotLicenciado = $hasCopilotLicense; CopilotUtilizado = ($null -ne $copilotDate)
+        UltimoCopilot = $copilotDate; DiasSemCopilot = $copilotDays
+        StatusCopilot = if (-not $copilotReportAvailable) { 'Coleta indisponivel' } else { Get-UsageState $copilotDays }
+        CandidatoRevisaoCopilot = ($copilotReportAvailable -and $hasCopilotLicense -and ($null -eq $copilotDays -or $copilotDays -gt 30))
         ExchangeDetectado = $hasExchangeLicense
         CandidatoCaixaCompartilhada = $sharedMailboxCandidate
         Recomendacao = $recommendation; PlanoMinimoSugerido = if ($sharedMailboxCandidate) { 'Caixa compartilhada (sem licenca, se elegivel)' } elseif ($minimum) { $minimum.name } else { $null }
@@ -385,6 +419,9 @@ $summary = [pscustomobject]@{
     licensedUsers = @($results | Where-Object LicencasAtuais).Count
     removalCandidates = @($results | Where-Object { $_.Recomendacao -like 'Candidato a remocao*' }).Count
     sharedMailboxCandidates = @($results | Where-Object CandidatoCaixaCompartilhada).Count
+    copilotReportAvailable = $copilotReportAvailable
+    copilotLicensedUsers = @($results | Where-Object CopilotLicenciado).Count
+    copilotActiveUsers = @($results | Where-Object CopilotUtilizado).Count
     estimatedMonthlySavingsBRL = Get-DecimalSum @($results) 'EconomiaMensalEstimadaBRL'
     priceCatalogAsOf = $catalogData.asOf; priceSource = $catalogData.source
 }
@@ -404,8 +441,10 @@ $inactivity = [ordered]@{
     OfficeDesktop30 = Get-LicensedInactivityCount 'DiasSemOfficeDesktop' 'OfficeDesktopLicenciado' 30; OfficeDesktop90 = Get-LicensedInactivityCount 'DiasSemOfficeDesktop' 'OfficeDesktopLicenciado' 90
     OfficeWeb30 = Get-LicensedInactivityCount 'DiasSemOfficeWeb' 'OfficeWebLicenciado' 30; OfficeWeb90 = Get-LicensedInactivityCount 'DiasSemOfficeWeb' 'OfficeWebLicenciado' 90
     Teams30 = Get-LicensedInactivityCount 'DiasSemTeams' 'TeamsLicenciado' 30; Teams90 = Get-LicensedInactivityCount 'DiasSemTeams' 'TeamsLicenciado' 90
+    Copilot30 = if ($copilotReportAvailable) { Get-LicensedInactivityCount 'DiasSemCopilot' 'CopilotLicenciado' 30 } else { $null }
+    Copilot90 = if ($copilotReportAvailable) { Get-LicensedInactivityCount 'DiasSemCopilot' 'CopilotLicenciado' 90 } else { $null }
 }
-$inactivityRows = foreach ($service in 'Login','Email','OneDrive','SharePoint','OfficeDesktop','OfficeWeb','Teams') {
+$inactivityRows = foreach ($service in 'Login','Email','OneDrive','SharePoint','OfficeDesktop','OfficeWeb','Teams','Copilot') {
     [pscustomobject]@{ Servico=$service; 'Sem uso >30 dias'=$inactivity["${service}30"]; 'Sem uso >90 dias'=$inactivity["${service}90"] }
 }
 $inactivityHtml = ($inactivityRows | ConvertTo-Html -Fragment) -join "`n"
@@ -421,9 +460,11 @@ foreach ($result in $results) {
         @{Service='SharePoint';Licensed='SharePointLicenciado';Days='DiasSemSharePoint';Status='StatusSharePoint'},
         @{Service='Office Desktop';Licensed='OfficeDesktopLicenciado';Days='DiasSemOfficeDesktop';Status='StatusOfficeDesktop'},
         @{Service='Office Web';Licensed='OfficeWebLicenciado';Days='DiasSemOfficeWeb';Status='StatusOfficeWeb'},
-        @{Service='Teams';Licensed='TeamsLicenciado';Days='DiasSemTeams';Status='StatusTeams'}
+        @{Service='Teams';Licensed='TeamsLicenciado';Days='DiasSemTeams';Status='StatusTeams'},
+        @{Service='Copilot';Licensed='CopilotLicenciado';Days='DiasSemCopilot';Status='StatusCopilot'}
     )) {
         if (-not $result.($definition.Licensed)) { continue }
+        if ($definition.Service -eq 'Copilot' -and -not $copilotReportAvailable) { continue }
         $daysWithoutUse = $result.($definition.Days)
         if ($null -ne $daysWithoutUse -and [int]$daysWithoutUse -le 30) { continue }
         $serviceReviewRows.Add([pscustomobject]@{
@@ -455,7 +496,7 @@ $planActions = @(
     [pscustomobject]@{ID=11;Pilar='Colaboracao';Acao='Definir regra simples para Teams, SharePoint e OneDrive';Origem='Colaboracao';Prioridade='Media';Responsavel='Gestores das areas';Prazo='';Status='Em andamento';Evidencia="$($inactivity.SharePoint90) sem SharePoint >90 dias; $($inactivity.OneDrive90) sem OneDrive >90 dias; $($inactivity.Teams90) licenciados sem Teams >90 dias";ProximoPasso='Validar regras e necessidade de Teams com usuarios-chave';Fonte='Lugar, acesso e tempo'},
     [pscustomobject]@{ID=12;Pilar='Ciclo de vida';Acao='Padronizar onboarding com conta, licenca, grupo, dispositivo e MFA';Origem='Onboarding';Prioridade='Alta';Responsavel='RH + TI';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Processo organizacional nao coletado';ProximoPasso='Criar checklist e aprovacao';Fonte='Revisar acesso apos entrada'},
     [pscustomobject]@{ID=13;Pilar='Ciclo de vida';Acao='Padronizar desligamento e transferencia de dados';Origem='Desligamento';Prioridade='Alta';Responsavel='RH + TI';Prazo='';Status='Em andamento';Evidencia="$sharedCount contas candidatas a caixa compartilhada por inatividade >90 dias";ProximoPasso='Validar preservacao, delegados, bloqueio de login e requisitos de licenca';Fonte='Acesso encerrado; dados preservados'},
-    [pscustomobject]@{ID=14;Pilar='IA';Acao='Selecionar casos de uso de Copilot e revisar permissoes';Origem='IA responsavel';Prioridade='Media';Responsavel='Negocio + TI';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Uso e permissoes do Copilot nao coletados';ProximoPasso='Escolher grupo piloto e metricas';Fonte='IA respeita permissoes existentes'},
+    [pscustomobject]@{ID=14;Pilar='IA';Acao='Selecionar casos de uso de Copilot e revisar permissoes';Origem='IA responsavel';Prioridade='Media';Responsavel='Negocio + TI';Prazo='';Status='Em andamento';Evidencia="$($summary.copilotLicensedUsers) usuarios com licenca associada; $($summary.copilotActiveUsers) com uso observado na janela";ProximoPasso='Revisar licenciados sem uso e escolher metricas de adocao';Fonte='Microsoft Graph - Microsoft 365 Copilot usage'},
     [pscustomobject]@{ID=15;Pilar='Continuidade';Acao='Definir politica de backup e teste de recuperacao';Origem='Lacunas da licenca';Prioridade='Alta';Responsavel='TI + negocio';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Backup nao e verificavel por relatorio de uso';ProximoPasso='Definir RPO, RTO, escopo e responsavel';Fonte='Retencao nao substitui backup dedicado'},
     [pscustomobject]@{ID=16;Pilar='Identidade';Acao='Manter menos de 5 Global Administrators e 2 contas de emergencia';Origem='Ganhos rapidos';Prioridade='Alta';Responsavel='Administrador de identidade';Prazo='';Status='Nao avaliada neste diagnostico';Evidencia='Funcoes administrativas nao coletadas';ProximoPasso='Inventariar administradores e testar contas break-glass';Fonte='Microsoft Entra - boas praticas de funcoes'}
 )
@@ -467,7 +508,7 @@ $notAssessedActions = @($planActions | Where-Object Status -Like 'Nao avaliada*'
 $actionPlanHtml = ($planActions | ConvertTo-Html -Fragment -Property ID,Pilar,Acao,Prioridade,Responsavel,Status,Evidencia,ProximoPasso,Fonte) -join "`n"
 
 $rowsHtml = ($results | Sort-Object EconomiaMensalEstimadaBRL -Descending | Select-Object -First 100 |
-    ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
+    ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,CopilotLicenciado,CopilotUtilizado,UltimoCopilot,StatusCopilot,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
 $html = @"
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>
 body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-serif}.page{max-width:1180px;margin:auto;background:#fff}.hero{padding:30px 34px;background:linear-gradient(135deg,#073b70,#0f6cbd);color:#fff}.hero h1{margin:0 0 8px;font-size:27px}.hero p{margin:3px 0;color:#dbeafe}.content{padding:26px 34px}.cards{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 26px}.card{min-width:180px;flex:1;padding:17px;border:1px solid #dbe3ee;border-radius:10px;background:#fff;box-shadow:0 2px 8px #0000000d}.card .value{font-size:25px;font-weight:700;color:#0f6cbd}.card .label{color:#64748b;margin-top:5px}.saving .value{color:#107c10}h2{margin-top:28px;color:#073b70;border-bottom:2px solid #dbeafe;padding-bottom:8px}table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;border:1px solid #dbe3ee;border-radius:8px;overflow:hidden}th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#0f6cbd;color:#fff;white-space:nowrap}tr:nth-child(even) td{background:#f8fafc}.note{background:#fff8db;border-left:5px solid #f2c811;padding:14px 16px;border-radius:4px}.good{background:#e8f5e9;border-left:5px solid #107c10;padding:14px 16px}.cta{margin:18px 0 26px;padding:18px 20px;background:#eef6ff;border:1px solid #b7d7f5;border-radius:10px}.cta strong{display:block;color:#073b70;font-size:16px;margin-bottom:6px}.cta a{display:inline-block;margin:8px 10px 0 0;padding:8px 13px;background:#0f6cbd;color:#fff;text-decoration:none;border-radius:5px}.cta a.whatsapp{background:#107c10}.footer{margin-top:28px;padding-top:15px;border-top:1px solid #ddd;color:#64748b;font-size:12px}.table-wrap{overflow-x:auto}@media(max-width:700px){.content,.hero{padding:20px}.cards{display:block}.card{margin-bottom:10px}}
@@ -478,7 +519,7 @@ body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-s
 <div class="good"><b>Objetivo:</b> priorizar oportunidades de economia sem executar qualquer alteracao automatica no tenant. O CSV anexo contem todos os usuarios e campos da analise.</div>
 <h2>Janela de inatividade por servico</h2><p>O quadro abaixo permite separar oportunidades recentes (mais de 30 dias) das mais consolidadas (mais de 90 dias).</p><div class="table-wrap">$inactivityHtml</div>
 <h2>Licencas Teams sem uso observado</h2><p>Usuarios com um service plan ativo do Teams e sem atividade observada ha mais de 30 dias. Ausencia de atividade pode incluir usuarios nunca vistos na janela; confirme contexto antes de remover standalone, complemento ou migrar para uma suite sem Teams.</p><div class="table-wrap">$teamsReviewHtml</div>
-<h2>Matriz licenciado versus utilizado</h2><p>Direitos ativos de email, OneDrive, SharePoint, Office Desktop, Office Web e Teams sem uso observado acima de 30 dias. A janela acima de 90 dias indica maior prioridade de revisao.</p><div class="table-wrap">$serviceReviewHtml</div>
+<h2>Matriz licenciado versus utilizado</h2><p>Direitos ativos de email, OneDrive, SharePoint, Office Desktop, Office Web, Teams e Microsoft 365 Copilot sem uso observado acima de 30 dias. A janela acima de 90 dias indica maior prioridade de revisao.</p><div class="table-wrap">$serviceReviewHtml</div>
 <h2>Recomendacoes por usuario</h2><p>Ordenadas pela maior economia mensal estimada. Caixas sem login por mais de 90 dias recebem destaque como candidatas a caixa compartilhada.</p><div class="table-wrap">$rowsHtml</div>
 <h2>Plano de acoes — Microsoft 365 na pratica</h2><p><b>16</b> acoes mapeadas: <b>$completedActions</b> concluidas pelo diagnostico, <b>$inProgressActions</b> em andamento e <b>$notAssessedActions</b> ainda nao avaliadas neste escopo. Responsaveis e prazos devem ser confirmados com o cliente.</p><div class="table-wrap">$actionPlanHtml</div>
 <h2>Como interpretar</h2><div class="note"><b>Revisao humana obrigatoria.</b> Ausencia de atividade nao comprova ausencia de necessidade. Antes de reduzir ou remover licencas, valide funcao do usuario, acesso delegado, tamanho da caixa, arquivo, retencao/hold, seguranca, compliance, dispositivos, Teams/telefonia e demais complementos. Valores sem preco publico nao entram na economia estimada.</div>

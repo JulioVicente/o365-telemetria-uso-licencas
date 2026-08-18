@@ -37,10 +37,10 @@ pwsh ./Invoke-M365LicenseAssessment.ps1
 
 Na instalacao guiada, e solicitado somente o e-mail do usuario que concedera as permissoes e recebera o relatorio. Nao existe pergunta separada sobre remetente: o envio ocorre pela propria conta autenticada no Microsoft Graph. O instalador valida que o login corresponde ao usuario informado e somente conclui depois que o Graph aceitar o envio e a copia oculta para `suprote@bestsoft.com.br`.
 
-Para uma execucao avulsa do script principal:
+O envio tambem fica ativo por padrao na execucao avulsa. O destinatario e sempre a conta autenticada; `EmailTo` nao redireciona o relatorio para outro usuario. Para gerar somente os arquivos locais:
 
 ```powershell
-pwsh ./Invoke-M365LicenseAssessment.ps1 -SendEmail -EmailTo gestor@contoso.com
+pwsh ./Invoke-M365LicenseAssessment.ps1 -SendEmail:$false
 ```
 
 Caso o endereco pretendido seja `suporte@bestsoft.com.br`, use `-BccAddress suporte@bestsoft.com.br`.
@@ -51,6 +51,7 @@ Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv` e
 
 - Login e cada carga de trabalho, incluindo Microsoft Teams, sao classificados em ativo ate 30 dias, inativo entre 31 e 90 dias, inativo acima de 90 dias ou sem atividade observada.
 - O relatorio separa usuarios com um service plan Teams ativo e sem uso ha mais de 30/90 dias. A recomendacao distingue candidatura a revisao; Teams incluido em uma suite pode exigir migracao para um SKU sem Teams, enquanto licencas standalone ou complementos podem permitir retirada direta.
+- O Microsoft 365 Copilot aparece por usuario com indicacao de licenca associada, uso observado, ultima atividade e inatividade em 30/90 dias. A coleta usa o relatorio oficial do Microsoft Graph e sinaliza quando ele estiver indisponivel.
 - Uma conta com licenca que inclui Exchange e sem login ha mais de 90 dias e marcada como candidata a caixa compartilhada. Isso preserva um endereco funcional e pode permitir a retirada da licenca, mas requer validacao antes da mudanca.
 - A recomendacao usa atividade observada em ate 180 dias. Sem atividade em todas as cargas, o usuario vira candidato a remocao, sujeito a validacao humana.
 - O menor plano sugerido cobre apenas email, OneDrive, SharePoint, Office Web e Office Desktop observados. Seguranca, Intune, Defender, Teams/telefonia, Power BI, compliance, arquivo e retencao exigem revisao humana; por isso planos Premium/E5 nao sao sugeridos automaticamente.
