@@ -8,12 +8,13 @@ param(
     [string]$BccAddress = 'suporte@bestsoft.com.br',
     [string]$ExpectedAccount,
     [switch]$SendEmail = $true,
+    [string]$ArchivePassword = 'bestsoft',
     [switch]$IncludeGuests
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.3.0'
+$solutionVersion = '1.4.0'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -185,6 +186,15 @@ function Test-MatchesAnyPattern {
     return $false
 }
 
+function Get-7ZipPath {
+    $command = Get-Command 7z.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    foreach ($path in 'C:\Program Files\7-Zip\7z.exe','C:\Program Files (x86)\7-Zip\7z.exe') {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+    }
+    throw '7-Zip nao encontrado. Execute novamente o instalador para habilitar o ZIP criptografado.'
+}
+
 function Get-MinimumPlan {
     param([hashtable]$Needs, [object[]]$Catalog)
     if (-not ($Needs.Email -or $Needs.OneDrive -or $Needs.SharePoint -or $Needs.OfficeWeb -or $Needs.OfficeDesktop)) {
@@ -300,6 +310,13 @@ $users = @(Invoke-WithSpinner 'Consultando diretorio' { Get-GraphCollection $use
 if (-not $IncludeGuests) { $users = @($users | Where-Object userType -EQ 'Member') }
 Write-ExecutionStatus 25 'Coletando assinaturas e SKUs do tenant...'
 $skus = @(Invoke-WithSpinner 'Consultando assinaturas' { Get-GraphCollection 'https://graph.microsoft.com/v1.0/subscribedSkus' })
+$companySubscriptionsAvailable = $true
+try {
+    $companySubscriptions = @(Invoke-WithSpinner 'Consultando ciclos das assinaturas' { Get-GraphCollection 'https://graph.microsoft.com/v1.0/directory/subscriptions' })
+} catch {
+    $companySubscriptionsAvailable = $false; $companySubscriptions = @()
+    Write-Warning "Nao foi possivel consultar datas das assinaturas: $($_.Exception.Message)"
+}
 
 Write-ExecutionStatus 33 'Coletando atividade geral do Microsoft 365...'
 $activeUsers = @(Invoke-WithSpinner 'Baixando atividade geral' { Get-ReportCsv 'getOffice365ActiveUserDetail' $TelemetryPeriodDays })
@@ -339,6 +356,50 @@ $copilotIndex = New-ReportIndex $copilotUsers
 $skuById = @{}; foreach ($sku in $skus) { $skuById[[string]$sku.skuId] = $sku }
 $priceBySku = @{}; foreach ($plan in $catalog) { foreach ($part in $plan.skuPartNumbers) { $priceBySku[$part] = $plan } }
 
+$subscriptionRows = if ($companySubscriptionsAvailable) {
+    foreach ($subscription in $companySubscriptions) {
+        $sku = $skuById[[string]$subscription.skuId]
+        $purchased = [int](Find-PropertyValue $subscription @('totalLicenses'))
+        $used = if ($sku) { [int](Find-PropertyValue $sku @('consumedUnits')) } else { 0 }
+        $enabled = if ($sku -and $sku.prepaidUnits) { [int](Find-PropertyValue $sku.prepaidUnits @('enabled')) } else { $purchased }
+        [pscustomobject]@{
+            Plano = Find-PropertyValue $subscription @('skuPartNumber')
+            IDAssinatura = Find-PropertyValue $subscription @('commerceSubscriptionId')
+            Status = Find-PropertyValue $subscription @('status')
+            Avaliacao = [bool](Find-PropertyValue $subscription @('isTrial'))
+            DataInicio = Convert-ToDateOrNull (Find-PropertyValue $subscription @('createdDateTime'))
+            DataProximoCiclo = Convert-ToDateOrNull (Find-PropertyValue $subscription @('nextLifecycleDateTime'))
+            QuantidadeAssinatura = $purchased
+            QuantidadeHabilitadaNoSku = $enabled
+            QuantidadeUsadaNoSku = $used
+            QuantidadeDisponivelNoSku = [math]::Max(0, $enabled - $used)
+            TermoFaturamento = 'Nao informado pelo Microsoft Graph; confirmar no Partner Center'
+            RestricaoReducao = 'Planos anuais ou anuais pagos mensalmente podem nao permitir reducao durante a vigencia; validar na renovacao'
+        }
+    }
+} else {
+    foreach ($sku in $skus) {
+        $enabled = if ($sku.prepaidUnits) { [int](Find-PropertyValue $sku.prepaidUnits @('enabled')) } else { 0 }
+        $used = [int](Find-PropertyValue $sku @('consumedUnits'))
+        [pscustomobject]@{
+            Plano=$sku.skuPartNumber;IDAssinatura='Nao disponivel';Status=$sku.capabilityStatus;Avaliacao=$null
+            DataInicio=$null;DataProximoCiclo=$null;QuantidadeAssinatura=$enabled;QuantidadeHabilitadaNoSku=$enabled
+            QuantidadeUsadaNoSku=$used;QuantidadeDisponivelNoSku=[math]::Max(0,$enabled-$used)
+            TermoFaturamento='Nao informado pelo Microsoft Graph; confirmar no Partner Center'
+            RestricaoReducao='Planos anuais ou anuais pagos mensalmente podem nao permitir reducao durante a vigencia; validar na renovacao'
+        }
+    }
+}
+$lifecycleBySkuId = @{}
+foreach ($subscription in $companySubscriptions) {
+    $lifecycleDate = Convert-ToDateOrNull (Find-PropertyValue $subscription @('nextLifecycleDateTime'))
+    if ($null -eq $lifecycleDate) { continue }
+    $skuKey = [string]$subscription.skuId
+    if (-not $lifecycleBySkuId.ContainsKey($skuKey)) { $lifecycleBySkuId[$skuKey] = [System.Collections.Generic.List[string]]::new() }
+    $dateText = $lifecycleDate.ToString('dd/MM/yyyy')
+    if (-not $lifecycleBySkuId[$skuKey].Contains($dateText)) { $lifecycleBySkuId[$skuKey].Add($dateText) }
+}
+
 Write-ExecutionStatus 72 'Consolidando telemetria e avaliando licencas...'
 $results = foreach ($user in $users) {
     $key = [string]$user.userPrincipalName.ToLowerInvariant()
@@ -362,6 +423,7 @@ $results = foreach ($user in $users) {
     $copilotDays = Get-DaysSince $copilotDate $now
 
     $assignedParts = @($user.assignedLicenses | ForEach-Object { $skuById[[string]$_.skuId].skuPartNumber } | Where-Object { $_ })
+    $userLifecycleDates = @($user.assignedLicenses | ForEach-Object { $lifecycleBySkuId[[string]$_.skuId] } | ForEach-Object { $_ } | Sort-Object -Unique)
     $knownCurrentPlans = @($assignedParts | ForEach-Object { $priceBySku[$_] } | Where-Object { $_ } | Sort-Object name -Unique)
     $currentPrice = Get-DecimalSum $knownCurrentPlans 'monthlyPriceBRL'
     $unpriced = @($assignedParts | Where-Object {
@@ -405,6 +467,7 @@ $results = foreach ($user in $users) {
     [pscustomobject]@{
         Nome = $user.displayName; UPN = $user.userPrincipalName; ContaHabilitada = $user.accountEnabled
         LicencasAtuais = ($assignedParts -join '; '); LicencasSemPrecoPublico = ($unpriced -join '; ')
+        ProximosCiclosLicencas = ($userLifecycleDates -join '; ')
         PrecoAtualMensalBRL = if ($unpriced.Count -eq 0) { [decimal]$currentPrice } else { $null }
         UltimoLogin = $signInDate; DiasSemLogin = $signInDays; StatusLogin = Get-UsageState $signInDays
         EmailLicenciado = $hasExchangeLicense; UltimoEmail = $emailDate; DiasSemEmail = $emailDays; StatusEmail = Get-UsageState $emailDays; CandidatoRevisaoEmail = ($hasExchangeLicense -and ($null -eq $emailDays -or $emailDays -gt 30))
@@ -428,6 +491,8 @@ $results = foreach ($user in $users) {
 $csvPath = Join-Path $runPath 'analise-usuarios.csv'
 Write-ExecutionStatus 82 'Gerando relatorio executivo e anexos...'
 $results | Sort-Object UPN | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding utf8BOM
+$subscriptionsPath = Join-Path $runPath 'planos-assinaturas.csv'
+$subscriptionRows | Sort-Object Plano,DataProximoCiclo | Export-Csv -LiteralPath $subscriptionsPath -NoTypeInformation -Encoding utf8BOM
 $summary = [pscustomobject]@{
     generatedAtUtc = $now.ToString('o'); solutionVersion = $solutionVersion
     tenantId = $context.TenantId; tenantName = $tenantName; defaultDomain = $defaultDomain
@@ -442,6 +507,8 @@ $summary = [pscustomobject]@{
     usersWithUnpricedLicenses = @($results | Where-Object LicencasSemPrecoPublico).Count
     estimatedMonthlySavingsBRL = Get-DecimalSum @($results) 'EconomiaMensalEstimadaBRL'
     priceCatalogAsOf = $catalogData.asOf; priceSource = $catalogData.source
+    companySubscriptionsAvailable = $companySubscriptionsAvailable
+    subscriptionsAnalyzed = @($subscriptionRows).Count
 }
 $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $runPath 'resumo.json') -Encoding utf8
 
@@ -524,9 +591,12 @@ $completedActions = @($planActions | Where-Object Status -Like 'Concluida*').Cou
 $inProgressActions = @($planActions | Where-Object Status -EQ 'Em andamento').Count
 $notAssessedActions = @($planActions | Where-Object Status -Like 'Nao avaliada*').Count
 $actionPlanHtml = ($planActions | ConvertTo-Html -Fragment -Property ID,Pilar,Acao,Prioridade,Responsavel,Status,Evidencia,ProximoPasso,Fonte) -join "`n"
+$subscriptionsHtml = if (@($subscriptionRows).Count -gt 0) {
+    ($subscriptionRows | Sort-Object Plano,DataProximoCiclo | ConvertTo-Html -Fragment -Property Plano,IDAssinatura,Status,Avaliacao,DataInicio,DataProximoCiclo,QuantidadeAssinatura,QuantidadeHabilitadaNoSku,QuantidadeUsadaNoSku,QuantidadeDisponivelNoSku,TermoFaturamento) -join "`n"
+} else { '<p>Nenhuma assinatura retornada pelo Microsoft Graph.</p>' }
 
 $rowsHtml = ($results | Sort-Object EconomiaMensalEstimadaBRL -Descending | Select-Object -First 100 |
-    ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,CopilotLicenciado,CopilotUtilizado,UltimoCopilot,StatusCopilot,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
+    ConvertTo-Html -Fragment -Property Nome,UPN,LicencasAtuais,ProximosCiclosLicencas,CopilotLicenciado,CopilotUtilizado,UltimoCopilot,StatusCopilot,StatusLogin,StatusEmail,StatusOneDrive,StatusSharePoint,StatusOfficeDesktop,StatusOfficeWeb,Recomendacao,PrecoAtualMensalBRL,PrecoSugeridoMensalBRL,EconomiaMensalEstimadaBRL) -join "`n"
 $html = @"
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>
 body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-serif}.page{max-width:1180px;margin:auto;background:#fff}.hero{padding:30px 34px;background:linear-gradient(135deg,#073b70,#0f6cbd);color:#fff}.hero h1{margin:0 0 8px;font-size:27px}.hero p{margin:3px 0;color:#dbeafe}.content{padding:26px 34px}.cards{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 26px}.card{min-width:180px;flex:1;padding:17px;border:1px solid #dbe3ee;border-radius:10px;background:#fff;box-shadow:0 2px 8px #0000000d}.card .value{font-size:25px;font-weight:700;color:#0f6cbd}.card .label{color:#64748b;margin-top:5px}.saving .value{color:#107c10}h2{margin-top:28px;color:#073b70;border-bottom:2px solid #dbeafe;padding-bottom:8px}table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px;border:1px solid #dbe3ee;border-radius:8px;overflow:hidden}th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#0f6cbd;color:#fff;white-space:nowrap}tr:nth-child(even) td{background:#f8fafc}.note{background:#fff8db;border-left:5px solid #f2c811;padding:14px 16px;border-radius:4px}.good{background:#e8f5e9;border-left:5px solid #107c10;padding:14px 16px}.cta{margin:18px 0 26px;padding:18px 20px;background:#eef6ff;border:1px solid #b7d7f5;border-radius:10px}.cta strong{display:block;color:#073b70;font-size:16px;margin-bottom:6px}.cta a{display:inline-block;margin:8px 10px 0 0;padding:8px 13px;background:#0f6cbd;color:#fff;text-decoration:none;border-radius:5px}.cta a.whatsapp{background:#107c10}.footer{margin-top:28px;padding-top:15px;border-top:1px solid #ddd;color:#64748b;font-size:12px}.table-wrap{overflow-x:auto}@media(max-width:700px){.content,.hero{padding:20px}.cards{display:block}.card{margin-bottom:10px}}
@@ -535,6 +605,8 @@ body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-s
 <div class="cta"><strong>Transforme os sinais deste relatorio em um plano seguro de otimizacao.</strong>Esta avaliacao automatizada e um ponto de partida. Para aprofundar licenciamento, seguranca, conformidade e economia com validacao do contexto de cada usuario, conte com a equipe BestSoft.<br><a href="https://www.bestsoft.com.br/">Conheca a BestSoft</a><a class="whatsapp" href="https://wa.me/555130265338">WhatsApp (51) 3026-5338</a></div>
 <div class="cards"><div class="card"><div class="value">$(@($results).Count)</div><div class="label">Usuarios analisados</div></div><div class="card"><div class="value">$($summary.sharedMailboxCandidates)</div><div class="label">Candidatos a caixa compartilhada</div></div><div class="card"><div class="value">$($summary.removalCandidates)</div><div class="label">Candidatos a remocao</div></div><div class="card saving"><div class="value">R$ $($summary.estimatedMonthlySavingsBRL.ToString('N2'))</div><div class="label">Economia mensal estimada$(if($summary.usersWithUnpricedLicenses -gt 0){" (parcial; $($summary.usersWithUnpricedLicenses) usuarios pendentes de preco)"})</div></div></div>
 <div class="good"><b>Objetivo:</b> priorizar oportunidades de economia sem executar qualquer alteracao automatica no tenant. O CSV anexo contem todos os usuarios e campos da analise.</div>
+<div class="note"><b>Compromisso contratual:</b> planos anuais e planos anuais pagos mensalmente normalmente nao permitem reduzir quantidades durante a vigencia. As recomendacoes representam oportunidades para validacao e, quando aplicavel, para a proxima renovacao. Confirme termo de faturamento, data contratual e regras de reducao no Partner Center ou com o parceiro; o Microsoft Graph nao informa o termo de cobranca.</div>
+<h2>Planos e assinaturas</h2><p>Quantidade comprada por assinatura e consumo agregado do SKU. A data do proximo ciclo e fornecida pelo Microsoft Graph e pode representar renovacao ou transicao de estado. Quando houver mais de uma assinatura do mesmo SKU, a quantidade usada e exibida no nivel agregado do SKU.</p><div class="table-wrap">$subscriptionsHtml</div>
 <h2>Janela de inatividade por servico</h2><p>O quadro abaixo permite separar oportunidades recentes (mais de 30 dias) das mais consolidadas (mais de 90 dias).</p><div class="table-wrap">$inactivityHtml</div>
 <h2>Licencas Teams sem uso observado</h2><p>Usuarios com um service plan ativo do Teams e sem atividade observada ha mais de 30 dias. Ausencia de atividade pode incluir usuarios nunca vistos na janela; confirme contexto antes de remover standalone, complemento ou migrar para uma suite sem Teams.</p><div class="table-wrap">$teamsReviewHtml</div>
 <h2>Matriz licenciado versus utilizado</h2><p>Direitos ativos de email, OneDrive, SharePoint, Office Desktop, Office Web, Teams e Microsoft 365 Copilot sem uso observado acima de 30 dias. A janela acima de 90 dias indica maior prioridade de revisao.</p><div class="table-wrap">$serviceReviewHtml</div>
@@ -546,17 +618,24 @@ body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-s
 $htmlPath = Join-Path $runPath 'relatorio.html'
 Set-Content -LiteralPath $htmlPath -Value $html -Encoding utf8
 
+Write-ExecutionStatus 90 'Gerando pacote criptografado do relatorio...'
+$zipPath = Join-Path $runPath 'relatorio-m365-completo.zip'
+$filesToArchive = @($csvPath, $subscriptionsPath, $actionPlanPath, $serviceReviewPath, $htmlPath, (Join-Path $runPath 'resumo.json'))
+$sevenZip = Get-7ZipPath
+$previousLocation = Get-Location
+try {
+    Set-Location -LiteralPath $runPath
+    $archiveNames = @($filesToArchive | ForEach-Object { Split-Path $_ -Leaf })
+    & $sevenZip a -tzip "-p$ArchivePassword" -mem=AES256 -- $zipPath @archiveNames | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $zipPath)) {
+        throw "Falha ao gerar o ZIP criptografado (codigo $LASTEXITCODE)."
+    }
+} finally { Set-Location -LiteralPath $previousLocation }
+
 if ($SendEmail) {
     Write-ExecutionStatus 94 'Enviando relatorio por email...'
     if ([string]::IsNullOrWhiteSpace($EmailTo)) { throw 'Nao foi possivel determinar o email da conta autenticada.' }
-    $zipPath = Join-Path ([IO.Path]::GetTempPath()) ("m365-license-report-{0}.zip" -f [guid]::NewGuid())
     try {
-        $archive = [IO.Compression.ZipFile]::Open($zipPath, [IO.Compression.ZipArchiveMode]::Create)
-        try {
-            foreach ($file in @($csvPath, $actionPlanPath, $serviceReviewPath, $htmlPath, (Join-Path $runPath 'resumo.json'))) {
-                [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file, (Split-Path $file -Leaf), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
-            }
-        } finally { $archive.Dispose() }
         $zipBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($zipPath))
         $message = @{ message = @{ subject = "Avaliacao de licencas Microsoft 365 - $tenantName"; body = @{ contentType='HTML'; content=$html }
             toRecipients = @(@{emailAddress=@{address=$EmailTo}})
@@ -570,7 +649,7 @@ if ($SendEmail) {
         }
     } catch {
         throw "A analise foi gerada, mas o envio falhou. Confirme que '$($context.Account)' possui caixa Exchange Online e consentimento Mail.Send. Detalhe: $($_.Exception.Message)"
-    } finally { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 if ($SendEmail) {

@@ -52,6 +52,17 @@ function Ensure-GraphModule {
         Install-Module Microsoft.Graph.Authentication -Scope AllUsers -Repository PSGallery -Force -AllowClobber
     }
 }
+function Ensure-7Zip {
+    Write-Step 'Validando 7-Zip para o arquivo criptografado'
+    $paths = @('C:\Program Files\7-Zip\7z.exe','C:\Program Files (x86)\7-Zip\7z.exe')
+    if ($paths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1) { return }
+    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if (-not $winget) { throw '7-Zip nao encontrado e winget indisponivel. Instale o 7-Zip e execute novamente.' }
+    if ($PSCmdlet.ShouldProcess('7-Zip', 'Instalar via winget para gerar ZIP AES-256')) {
+        & $winget.Source install --id 7zip.7zip --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar o 7-Zip via winget (codigo $LASTEXITCODE)." }
+    }
+}
 function Copy-ProjectFiles([string]$Destination) {
     Write-Step 'Obtendo os componentes da solucao'
     foreach ($relativePath in $requiredFiles) {
@@ -98,6 +109,7 @@ try {
     Write-Host 'M365 License Assessment - Instalacao' -ForegroundColor Green
     Assert-Environment
     Ensure-GraphModule
+    Ensure-7Zip
     if ($PSCmdlet.ShouldProcess($InstallPath, 'Criar diretorio de instalacao')) {
         if ($existed) {
             New-Item -ItemType Directory -Path $rollback -Force | Out-Null

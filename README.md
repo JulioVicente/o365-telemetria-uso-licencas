@@ -27,6 +27,7 @@ Depois da instalação, as próximas avaliações podem ser iniciadas com:
 - PowerShell 7.2 ou superior.
 - Uma conta corporativa com acesso aos relatorios e leitura do diretorio.
 - Modulo `Microsoft.Graph.Authentication`.
+- 7-Zip para gerar o pacote protegido; o instalador o provisiona via `winget` quando necessario.
 
 ```powershell
 Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
@@ -50,7 +51,7 @@ pwsh ./Invoke-M365LicenseAssessment.ps1 -SendEmail:$false
 
 Para alterar excepcionalmente a copia oculta, use `-BccAddress outro-endereco@dominio.com`.
 
-Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv` e `resumo.json`.
+Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv`, `planos-assinaturas.csv`, `resumo.json` e `relatorio-m365-completo.zip`. O ZIP usa criptografia AES-256 e a senha `bestsoft`; ele permanece no diretorio e e o arquivo anexado ao e-mail.
 
 ## Criterios e limites
 
@@ -65,5 +66,6 @@ Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv` e
 - Caixa compartilhada sem licenca e limitada a 50 GB. Mais de 50 GB, arquivo, litigation hold e determinados recursos avancados de retencao/seguranca podem exigir licenca. O script apenas recomenda: nao converte a caixa, nao bloqueia a conta e nao remove licencas.
 - Precos mudam e podem variar por impostos, canal, contrato e promocao. Atualize `config/license-catalog.pt-BR.json` antes de uma decisao comercial.
 - O catalogo inclui valores publicos de fallback para Microsoft 365 E5 sem Teams, Teams Enterprise, Teams Premium e Microsoft 365 Copilot, com a URL oficial registrada em cada item. SKUs gratuitos, virais, trial e sandbox nao bloqueiam a estimativa. Complementos pagos nao sao removidos automaticamente de uma recomendacao de troca do plano principal.
+- O relatorio inclui uma secao de planos e assinaturas com status, proximo ciclo, quantidade comprada, usada e disponivel. O Microsoft Graph nao informa se a cobranca e mensal, anual ou anual paga mensalmente; essa informacao deve ser confirmada no Partner Center. Recomendacoes de reducao nao significam que a quantidade possa ser alterada durante uma vigencia anual.
 
 Fontes: [relatorios de uso do Microsoft Graph](https://learn.microsoft.com/graph/api/resources/report), [SKUs inscritos](https://learn.microsoft.com/graph/api/subscribedsku-list), [precos Business Brasil](https://www.microsoft.com/pt-br/microsoft-365/business/microsoft-365-plans-and-pricing) e [precos Office 365 Enterprise Brasil](https://www.microsoft.com/pt-br/microsoft-365/enterprise/office-365-plans-and-pricing).

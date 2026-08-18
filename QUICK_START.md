@@ -33,6 +33,8 @@ Depois, execute quando desejar:
 
 Na primeira conexao, autentique-se com o usuario informado e consinta as permissoes solicitadas, inclusive `Mail.Send`. Toda execucao instalada envia o relatorio ao proprio usuario e uma copia oculta para a BestSoft. Nenhuma licenca ou caixa postal e alterada.
 
+Cada execucao mantem um `relatorio-m365-completo.zip` protegido por AES-256 dentro da pasta `output/<data-hora>`. A senha do arquivo e `bestsoft`; o mesmo pacote protegido e enviado por e-mail.
+
 Apos o login, o terminal mostra horario, etapa, percentual e um indicador animado `| / - \` com tempo decorrido durante chamadas demoradas. Relatorios do Microsoft 365 podem levar alguns minutos; aguarde a confirmacao final de envio ou uma mensagem explicita de erro.
 
 Antes da coleta completa, a instalacao faz uma pre-validacao de identidade, usuarios/sign-in, SKUs, cinco APIs de relatorios e envio pelo Exchange Online. Um pequeno email tecnico e enviado ao proprio usuario para comprovar `Mail.Send`. Somente depois disso a analise comeca. Falhas transitorias `429` e `5xx` recebem novas tentativas automaticas com espera progressiva.
