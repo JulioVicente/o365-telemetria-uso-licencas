@@ -5,7 +5,7 @@ param(
     [string]$PriceCatalogPath = (Join-Path $PSScriptRoot 'config\license-catalog.pt-BR.json'),
     [ValidateSet(30, 90, 180)] [int]$TelemetryPeriodDays = 180,
     [string]$EmailTo,
-    [string]$BccAddress = 'suprote@bestsoft.com.br',
+    [string]$BccAddress = 'suporte@bestsoft.com.br',
     [string]$ExpectedAccount,
     [switch]$SendEmail = $true,
     [switch]$IncludeGuests

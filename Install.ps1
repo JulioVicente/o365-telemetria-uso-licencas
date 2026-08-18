@@ -111,7 +111,7 @@ try {
     Write-Step 'Configuracao interativa'
     Write-Host 'Informe o usuario que concedera as permissoes e recebera o relatorio.' -ForegroundColor Yellow
     $accountEmail = Read-EmailAddress 'Email do usuario'
-    $configuration = [ordered]@{ SchemaVersion=1; AccountEmail=$accountEmail; BccAddress='suprote@bestsoft.com.br'; TelemetryPeriodDays=180 }
+    $configuration = [ordered]@{ SchemaVersion=1; AccountEmail=$accountEmail; BccAddress='suporte@bestsoft.com.br'; TelemetryPeriodDays=180 }
     $configPath = Join-Path $InstallPath 'config\settings.json'
     if ($PSCmdlet.ShouldProcess($configPath, 'Gravar configuracao')) {
         $configuration | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding utf8

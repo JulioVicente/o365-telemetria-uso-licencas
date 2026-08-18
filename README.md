@@ -4,18 +4,23 @@ PowerShell para autenticar interativamente em um tenant, coletar usuarios, licen
 
 O relatorio identifica no preambulo a organizacao, Tenant ID, dominio padrao, usuario/conta que executou, data UTC, janela analisada e versao da ferramenta. A permissao `Organization.Read.All` e usada somente para ler esses dados de identificacao.
 
-## Instalacao guiada
+## Instalacao rapida
 
-O processo segue o mesmo padrao do projeto `sharepoint-version-cleanup`: instalador auditavel, suporte a `-WhatIf`, instalacao em `%ProgramData%`, configuracao interativa e rollback local em caso de falha.
+Abra o PowerShell 7 como administrador e execute:
 
 ```powershell
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main/Install.ps1' -OutFile "$env:TEMP\Install-M365LicenseAssessment.ps1"
-Get-Content "$env:TEMP\Install-M365LicenseAssessment.ps1"
-& "$env:TEMP\Install-M365LicenseAssessment.ps1" -WhatIf
-& "$env:TEMP\Install-M365LicenseAssessment.ps1"
+iwr -useb https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main/Install.ps1 | iex
 ```
 
-Veja [QUICK_START.md](QUICK_START.md) para a operacao depois da instalacao.
+O instalador baixa os componentes publicados, instala em `%ProgramData%\M365LicenseAssessment`, solicita o e-mail da conta que fará a autenticação e executa a primeira avaliação. O processo possui validação dos componentes e rollback local em caso de falha.
+
+Para inspecionar ou simular o instalador antes da execução, use o procedimento auditável descrito no [QUICK_START.md](QUICK_START.md).
+
+Depois da instalação, as próximas avaliações podem ser iniciadas com:
+
+```powershell
+& "$env:ProgramData\M365LicenseAssessment\Run-Assessment.ps1"
+```
 
 ## Requisitos
 
@@ -35,7 +40,7 @@ Na primeira execucao, o administrador deve consentir com `User.Read.All`, `Audit
 pwsh ./Invoke-M365LicenseAssessment.ps1
 ```
 
-Na instalacao guiada, e solicitado somente o e-mail do usuario que concedera as permissoes e recebera o relatorio. Nao existe pergunta separada sobre remetente: o envio ocorre pela propria conta autenticada no Microsoft Graph. O instalador valida que o login corresponde ao usuario informado e somente conclui depois que o Graph aceitar o envio e a copia oculta para `suprote@bestsoft.com.br`.
+Na instalacao guiada, e solicitado somente o e-mail do usuario que concedera as permissoes e recebera o relatorio. Nao existe pergunta separada sobre remetente: o envio ocorre pela propria conta autenticada no Microsoft Graph. O instalador valida que o login corresponde ao usuario informado e somente conclui depois que o Graph aceitar o envio e a copia oculta para `suporte@bestsoft.com.br`.
 
 O envio tambem fica ativo por padrao na execucao avulsa. O destinatario e sempre a conta autenticada; `EmailTo` nao redireciona o relatorio para outro usuario. Para gerar somente os arquivos locais:
 
@@ -43,7 +48,7 @@ O envio tambem fica ativo por padrao na execucao avulsa. O destinatario e sempre
 pwsh ./Invoke-M365LicenseAssessment.ps1 -SendEmail:$false
 ```
 
-Caso o endereco pretendido seja `suporte@bestsoft.com.br`, use `-BccAddress suporte@bestsoft.com.br`.
+Para alterar excepcionalmente a copia oculta, use `-BccAddress outro-endereco@dominio.com`.
 
 Cada execucao cria `output/<data-hora>/relatorio.html`, `analise-usuarios.csv` e `resumo.json`.
 
