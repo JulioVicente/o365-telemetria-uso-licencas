@@ -179,6 +179,12 @@ function Get-DecimalSum {
     return $total
 }
 
+function Test-MatchesAnyPattern {
+    param([string]$Value, [string[]]$Patterns)
+    foreach ($pattern in @($Patterns)) { if ($Value -like $pattern) { return $true } }
+    return $false
+}
+
 function Get-MinimumPlan {
     param([hashtable]$Needs, [object[]]$Catalog)
     if (-not ($Needs.Email -or $Needs.OneDrive -or $Needs.SharePoint -or $Needs.OfficeWeb -or $Needs.OfficeDesktop)) {
@@ -216,6 +222,7 @@ Import-RequiredModule Microsoft.Graph.Authentication
 if (-not (Test-Path -LiteralPath $PriceCatalogPath)) { throw "Catalogo nao encontrado: $PriceCatalogPath" }
 $catalogData = Get-Content -LiteralPath $PriceCatalogPath -Raw | ConvertFrom-Json
 $catalog = @($catalogData.plans)
+$nonCommercialSkuPatterns = @($catalogData.nonCommercialSkuPatterns)
 
 $scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 'Organization.Read.All', 'Reports.Read.All')
 if ($SendEmail) { $scopes += 'Mail.Send' }
@@ -357,7 +364,9 @@ $results = foreach ($user in $users) {
     $assignedParts = @($user.assignedLicenses | ForEach-Object { $skuById[[string]$_.skuId].skuPartNumber } | Where-Object { $_ })
     $knownCurrentPlans = @($assignedParts | ForEach-Object { $priceBySku[$_] } | Where-Object { $_ } | Sort-Object name -Unique)
     $currentPrice = Get-DecimalSum $knownCurrentPlans 'monthlyPriceBRL'
-    $unpriced = @($assignedParts | Where-Object { -not $priceBySku.ContainsKey($_) })
+    $unpriced = @($assignedParts | Where-Object {
+        -not $priceBySku.ContainsKey($_) -and -not (Test-MatchesAnyPattern $_ $nonCommercialSkuPatterns)
+    })
     $needs = @{
         Email = ($null -ne $emailDays -and $emailDays -le 90)
         OneDrive = ($null -ne $driveDays -and $driveDays -le 90)
@@ -382,7 +391,15 @@ $results = foreach ($user in $users) {
         elseif ($sharedMailboxCandidate) { 'Candidato a caixa compartilhada; validar tamanho, arquivo, retencao/hold, acesso delegado e bloquear login antes de remover licencas' }
         elseif ($null -eq $minimum) { 'Candidato a remocao completa; validar funcao, retencao, caixa compartilhada e requisitos de seguranca' }
         else { "Avaliar $($minimum.name)" }
-    $recommendedPrice = if ($sharedMailboxCandidate) { [decimal]0 } elseif ($minimum) { [decimal]$minimum.monthlyPriceBRL } else { [decimal]0 }
+    $retainedAddOns = @($knownCurrentPlans | Where-Object {
+        $retainAlways = Find-PropertyValue $_ @('retainOnRecommendation')
+        $retainWhenUsed = Find-PropertyValue $_ @('retainWhenUsed')
+        $retainAlways -or ($retainWhenUsed -eq 'Copilot' -and $null -ne $copilotDate)
+    })
+    $retainedAddOnPrice = Get-DecimalSum $retainedAddOns 'monthlyPriceBRL'
+    $recommendedPrice = if ($sharedMailboxCandidate) { [decimal]0 }
+        elseif ($minimum) { [decimal]$minimum.monthlyPriceBRL + $retainedAddOnPrice }
+        else { [decimal]0 }
     $saving = if ($unpriced.Count -eq 0) { [math]::Max(0, [decimal]$currentPrice - $recommendedPrice) } else { $null }
 
     [pscustomobject]@{
@@ -422,6 +439,7 @@ $summary = [pscustomobject]@{
     copilotReportAvailable = $copilotReportAvailable
     copilotLicensedUsers = @($results | Where-Object CopilotLicenciado).Count
     copilotActiveUsers = @($results | Where-Object CopilotUtilizado).Count
+    usersWithUnpricedLicenses = @($results | Where-Object LicencasSemPrecoPublico).Count
     estimatedMonthlySavingsBRL = Get-DecimalSum @($results) 'EconomiaMensalEstimadaBRL'
     priceCatalogAsOf = $catalogData.asOf; priceSource = $catalogData.source
 }
@@ -515,7 +533,7 @@ body{margin:0;background:#f3f6fa;color:#1f2937;font:14px 'Segoe UI',Arial,sans-s
 </style></head><body><div class="page"><div class="hero"><h1>Avaliacao de licencas Microsoft 365</h1><p>Resumo executivo de utilizacao e oportunidades de otimizacao</p><p>$tenantName &bull; $($now.ToString('dd/MM/yyyy HH:mm')) UTC &bull; janela de $TelemetryPeriodDays dias</p></div><div class="content">
 <h2>Identificacao do relatorio</h2><table><tr><th>Organizacao</th><td>$tenantName</td><th>Dominio padrao</th><td>$defaultDomain</td></tr><tr><th>Tenant ID</th><td>$($context.TenantId)</td><th>Tipo de tenant</th><td>$tenantType</td></tr><tr><th>Gerado por</th><td>$operatorName</td><th>Conta autenticada</th><td>$($context.Account)</td></tr><tr><th>Data de geracao</th><td>$($now.ToString('dd/MM/yyyy HH:mm')) UTC</td><th>Ferramenta</th><td>M365 License Assessment v$solutionVersion</td></tr></table>
 <div class="cta"><strong>Transforme os sinais deste relatorio em um plano seguro de otimizacao.</strong>Esta avaliacao automatizada e um ponto de partida. Para aprofundar licenciamento, seguranca, conformidade e economia com validacao do contexto de cada usuario, conte com a equipe BestSoft.<br><a href="https://www.bestsoft.com.br/">Conheca a BestSoft</a><a class="whatsapp" href="https://wa.me/555130265338">WhatsApp (51) 3026-5338</a></div>
-<div class="cards"><div class="card"><div class="value">$(@($results).Count)</div><div class="label">Usuarios analisados</div></div><div class="card"><div class="value">$($summary.sharedMailboxCandidates)</div><div class="label">Candidatos a caixa compartilhada</div></div><div class="card"><div class="value">$($summary.removalCandidates)</div><div class="label">Candidatos a remocao</div></div><div class="card saving"><div class="value">R$ $($summary.estimatedMonthlySavingsBRL.ToString('N2'))</div><div class="label">Economia mensal estimada</div></div></div>
+<div class="cards"><div class="card"><div class="value">$(@($results).Count)</div><div class="label">Usuarios analisados</div></div><div class="card"><div class="value">$($summary.sharedMailboxCandidates)</div><div class="label">Candidatos a caixa compartilhada</div></div><div class="card"><div class="value">$($summary.removalCandidates)</div><div class="label">Candidatos a remocao</div></div><div class="card saving"><div class="value">R$ $($summary.estimatedMonthlySavingsBRL.ToString('N2'))</div><div class="label">Economia mensal estimada$(if($summary.usersWithUnpricedLicenses -gt 0){" (parcial; $($summary.usersWithUnpricedLicenses) usuarios pendentes de preco)"})</div></div></div>
 <div class="good"><b>Objetivo:</b> priorizar oportunidades de economia sem executar qualquer alteracao automatica no tenant. O CSV anexo contem todos os usuarios e campos da analise.</div>
 <h2>Janela de inatividade por servico</h2><p>O quadro abaixo permite separar oportunidades recentes (mais de 30 dias) das mais consolidadas (mais de 90 dias).</p><div class="table-wrap">$inactivityHtml</div>
 <h2>Licencas Teams sem uso observado</h2><p>Usuarios com um service plan ativo do Teams e sem atividade observada ha mais de 30 dias. Ausencia de atividade pode incluir usuarios nunca vistos na janela; confirme contexto antes de remover standalone, complemento ou migrar para uma suite sem Teams.</p><div class="table-wrap">$teamsReviewHtml</div>

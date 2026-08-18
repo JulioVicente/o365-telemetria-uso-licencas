@@ -4,6 +4,15 @@
   "billing": "por usuario/mes, compromisso anual",
   "taxNote": "Consulte a pagina de origem; a exibicao de impostos varia por familia e canal.",
   "source": "https://www.microsoft.com/pt-br/microsoft-365/business/microsoft-365-plans-and-pricing e https://www.microsoft.com/pt-br/microsoft-365/enterprise/office-365-plans-and-pricing",
+  "nonCommercialSkuPatterns": [
+    "FLOW_FREE",
+    "POWER_BI_STANDARD",
+    "*Partner_Sandbox*",
+    "*_VIRAL",
+    "*_vTrial_*",
+    "POWERAPPS_DEV",
+    "STREAM"
+  ],
   "plans": [
     {"name":"Microsoft 365 Business Basic","monthlyPriceBRL":33.40,"recommendable":true,"skuPartNumbers":["O365_BUSINESS_ESSENTIALS"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":false}},
     {"name":"Microsoft 365 Business Standard","monthlyPriceBRL":80.10,"recommendable":true,"skuPartNumbers":["O365_BUSINESS_PREMIUM"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
@@ -11,6 +20,10 @@
     {"name":"Office 365 E1","monthlyPriceBRL":57.30,"recommendable":true,"skuPartNumbers":["STANDARDPACK"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":false}},
     {"name":"Office 365 E3","monthlyPriceBRL":131.70,"recommendable":true,"skuPartNumbers":["ENTERPRISEPACK"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
     {"name":"Office 365 E5","monthlyPriceBRL":217.60,"recommendable":false,"skuPartNumbers":["ENTERPRISEPREMIUM"],"features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
-    {"name":"Microsoft 365 Apps para Grandes Empresas","monthlyPriceBRL":68.70,"recommendable":true,"skuPartNumbers":["OFFICESUBSCRIPTION"],"features":{"email":false,"oneDrive":true,"sharePoint":false,"officeWeb":true,"officeDesktop":true}}
+    {"name":"Microsoft 365 Apps para Grandes Empresas","monthlyPriceBRL":68.70,"recommendable":true,"skuPartNumbers":["OFFICESUBSCRIPTION"],"features":{"email":false,"oneDrive":true,"sharePoint":false,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Microsoft 365 E5 (sem Teams)","monthlyPriceBRL":277.40,"recommendable":false,"skuPartNumbers":["Microsoft_365_E5_(no_Teams)"],"priceKind":"publicFallback","priceSource":"https://www.microsoft.com/pt-br/microsoft-365/enterprise/e5","features":{"email":true,"oneDrive":true,"sharePoint":true,"officeWeb":true,"officeDesktop":true}},
+    {"name":"Microsoft Teams Enterprise","monthlyPriceBRL":49.00,"recommendable":false,"skuPartNumbers":["Microsoft_Teams_Enterprise_New"],"priceKind":"publicFallback","priceSource":"https://www.microsoft.com/pt-br/microsoft-teams/compare-microsoft-teams-enterprise-options","features":{"email":false,"oneDrive":false,"sharePoint":false,"officeWeb":false,"officeDesktop":false}},
+    {"name":"Microsoft Teams Premium","monthlyPriceBRL":57.30,"recommendable":false,"retainOnRecommendation":true,"skuPartNumbers":["Microsoft_Teams_Premium"],"priceKind":"publicFallback","priceSource":"https://www.microsoft.com/pt-br/microsoft-teams/compare-microsoft-teams-enterprise-options","features":{"email":false,"oneDrive":false,"sharePoint":false,"officeWeb":false,"officeDesktop":false}},
+    {"name":"Microsoft 365 Copilot","monthlyPriceBRL":171.80,"recommendable":false,"retainWhenUsed":"Copilot","skuPartNumbers":["Microsoft_365_Copilot"],"priceKind":"publicFallback","priceSource":"https://www.microsoft.com/pt-br/microsoft-365/copilot/pricing/enterprise","features":{"email":false,"oneDrive":false,"sharePoint":false,"officeWeb":false,"officeDesktop":false}}
   ]
 }
