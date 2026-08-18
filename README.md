@@ -4,6 +4,8 @@ PowerShell para autenticar interativamente em um tenant, coletar usuarios, licen
 
 O relatorio identifica no preambulo a organizacao, Tenant ID, dominio padrao, usuario/conta que executou, data UTC, janela analisada e versao da ferramenta. A permissao `Organization.Read.All` e usada somente para ler esses dados de identificacao.
 
+> **Uso responsável e transparência:** ao prosseguir, o administrador confirma que está autorizado a avaliar o tenant e está ciente das permissões solicitadas. Os dados de usuários, licenças e utilização são processados para gerar o diagnóstico, mantidos localmente em `output` e enviados para a própria conta autenticada, com cópia de suporte para `suporte@bestsoft.com.br`. O relatório é consultivo, deve ser tratado conforme as políticas de privacidade da organização e não executa alterações no tenant.
+
 ## Instalacao rapida
 
 Abra o PowerShell como administrador e execute:
@@ -35,6 +37,17 @@ Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 ```
 
 Na primeira execucao, o administrador deve consentir com `User.Read.All`, `AuditLog.Read.All`, `LicenseAssignment.Read.All` e `Reports.Read.All`. Para envio, tambem e solicitado `Mail.Send`. A disponibilidade de `signInActivity` depende da licenca/role do tenant. O Graph pode anonimizar nomes nos relatorios; desative essa opcao no Centro de Administracao do Microsoft 365 para correlacao por UPN.
+
+## Controle e revogação de acesso
+
+O administrador mantém o controle e pode interromper ou revogar o acesso a qualquer momento:
+
+1. Execute `Disconnect-MgGraph` para encerrar a sessão atual.
+2. No [Centro de administração do Microsoft Entra](https://entra.microsoft.com), acesse **Entra ID > Aplicativos empresariais > Todos os aplicativos**.
+3. Localize o aplicativo utilizado no consentimento do Microsoft Graph, abra **Permissões** e revogue as permissões concedidas que não deseja manter.
+4. Se não quiser conservar os artefatos, remova a pasta `%ProgramData%\M365LicenseAssessment` e as cópias recebidas por e-mail conforme a política interna da organização.
+
+A revogação impede novos acessos com o consentimento removido, mas não apaga automaticamente relatórios já gerados ou enviados. Consulte também as [instruções oficiais para revisar e revogar permissões de aplicativos](https://learn.microsoft.com/entra/identity/enterprise-apps/manage-application-permissions).
 
 ## Executar
 
