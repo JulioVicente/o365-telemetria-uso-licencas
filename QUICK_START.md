@@ -8,7 +8,7 @@ Abra o PowerShell como administrador e execute:
 iwr -useb https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main/Install.ps1 | iex
 ```
 
-O comando baixa e executa o instalador publicado na branch `main`. Se a sessao atual for Windows PowerShell 5.1, o instalador provisiona o PowerShell 7 via `winget` e continua automaticamente. Depois instala os componentes, solicita o e-mail da conta de autenticação, coleta a telemetria e envia o relatório para essa mesma conta, com cópia oculta para `suporte@bestsoft.com.br`.
+O comando baixa o instalador de `main`, que seleciona os componentes da versao estavel `v1.4.2`. Se a sessao atual for Windows PowerShell 5.1, o instalador provisiona o PowerShell 7 via `winget` e continua automaticamente. Depois instala os componentes, solicita o e-mail da conta de autenticação, coleta a telemetria e envia o relatório para essa mesma conta, com cópia oculta para `suporte@bestsoft.com.br`.
 
 ## Opcao auditavel
 
@@ -37,4 +37,6 @@ Cada execucao mantem um `relatorio-m365-completo.zip` protegido por AES-256 dent
 
 Apos o login, o terminal mostra horario, etapa, percentual e um indicador animado `| / - \` com tempo decorrido durante chamadas demoradas. Relatorios do Microsoft 365 podem levar alguns minutos; aguarde a confirmacao final de envio ou uma mensagem explicita de erro.
 
-Antes da coleta completa, a instalacao faz uma pre-validacao de identidade, usuarios/sign-in, SKUs, cinco APIs de relatorios e envio pelo Exchange Online. Um pequeno email tecnico e enviado ao proprio usuario para comprovar `Mail.Send`. Somente depois disso a analise comeca. Falhas transitorias `429` e `5xx` recebem novas tentativas automaticas com espera progressiva.
+Antes da coleta completa, a instalacao faz uma pre-validacao de identidade, leitura basica de usuarios, atividade de login, SKUs, organizacao, seis APIs de relatorios e envio pelo Exchange Online. Um pequeno email tecnico e enviado ao proprio usuario para comprovar `Mail.Send`. Somente depois disso a analise comeca. Falhas transitorias `429` e `5xx` selecionadas recebem novas tentativas automaticas com espera progressiva; um `403` nao e repetido automaticamente.
+
+Em falha de pre-validacao, confira o endpoint e a orientacao exibidos. O diagnostico `%TEMP%/m365-preflight-<id>.json` e preservado fora do rollback. Acesso a atividade de login exige Entra ID P1/P2, permissoes Graph e funcao compativel; acesso a relatorios tambem depende da funcao do usuario. Consulte a secao de erro 403 no README. O codigo nao pode conceder privilegios administrativos ou licencas ausentes no tenant.

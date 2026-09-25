@@ -1,0 +1,25 @@
+name: Tests
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester
+        shell: pwsh
+        run: Install-PSResource Pester -Version 5.7.1 -Scope CurrentUser -TrustRepository -Quiet
+      - name: Test Graph diagnostics without tenant access
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.7.1
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Run.PassThru = $true
+          $config.TestRegistry.Enabled = $false
+          $result = Invoke-Pester -Configuration $config
+          if ($result.FailedCount -or $result.FailedContainersCount) { throw 'Tests failed.' }

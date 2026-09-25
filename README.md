@@ -2,6 +2,8 @@
 
 PowerShell para autenticar interativamente em um tenant, coletar usuarios, licencas e relatorios de uso do Microsoft Graph e gerar uma analise de reducao. O script **nao altera licencas**.
 
+Versao estavel: **v1.4.2**. O instalador seleciona os componentes dessa tag. Cada publicacao estavel recebe uma nova versao, tag e release; tags publicadas nao devem ser reutilizadas.
+
 O relatorio identifica no preambulo a organizacao, Tenant ID, dominio padrao, usuario/conta que executou, data UTC, janela analisada e versao da ferramenta. A permissao `Organization.Read.All` e usada somente para ler esses dados de identificacao.
 
 > **Uso responsável e transparência:** ao prosseguir, o administrador confirma que está autorizado a avaliar o tenant e está ciente das permissões solicitadas. Os dados de usuários, licenças e utilização são processados para gerar o diagnóstico, mantidos localmente em `output` e enviados para a própria conta autenticada, com cópia de suporte para `suporte@bestsoft.com.br`. O relatório é consultivo, deve ser tratado conforme as políticas de privacidade da organização e não executa alterações no tenant.
@@ -36,7 +38,20 @@ Depois da instalação, as próximas avaliações podem ser iniciadas com:
 Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
 ```
 
-Na primeira execucao, o administrador deve consentir com `User.Read.All`, `AuditLog.Read.All`, `LicenseAssignment.Read.All` e `Reports.Read.All`. Para envio, tambem e solicitado `Mail.Send`. A disponibilidade de `signInActivity` depende da licenca/role do tenant. O Graph pode anonimizar nomes nos relatorios; desative essa opcao no Centro de Administracao do Microsoft 365 para correlacao por UPN.
+Na primeira execucao, o administrador deve consentir com `User.Read.All`, `AuditLog.Read.All`, `LicenseAssignment.Read.All`, `Organization.Read.All` e `Reports.Read.All`. Para envio, tambem e solicitado `Mail.Send`. O acesso a `signInActivity` exige Microsoft Entra ID P1/P2 e uma funcao compativel, como Reports Reader (Leitor de Relatorios), alem das permissoes Graph. O Graph pode anonimizar nomes nos relatorios; desative essa opcao no Centro de Administracao do Microsoft 365 para correlacao por UPN.
+
+## Erro 403 na pre-validacao
+
+Login bem-sucedido nao comprova autorizacao para todas as APIs. Na v1.4.2, a falha identifica metodo/URL, status HTTP, codigo do Graph, request-id (quando fornecido) e a acao recomendada. O arquivo `%TEMP%/m365-preflight-<id>.json` permanece disponivel mesmo quando o instalador reverte os arquivos locais. Ele nao registra cabecalhos, tokens, corpos de requisicao nem relatorios baixados.
+
+- `/users?...signInActivity`: confira consentimento de `User.Read.All` e `AuditLog.Read.All`, licenca Entra ID P1/P2 e a funcao ativa do usuario. Se usa PIM, ative a funcao antes de autenticar novamente. [Requisitos oficiais](https://learn.microsoft.com/en-us/entra/identity/monitoring-health/howto-manage-inactive-user-accounts).
+- `/reports/...`: confira `Reports.Read.All` e uma funcao autorizada para relatorios, como Reports Reader. [Autorizacao dos relatorios](https://learn.microsoft.com/en-us/graph/api/reportroot-getoffice365activeuserdetail?view=graph-rest-1.0).
+- `/me/sendMail`: confira `Mail.Send` delegado, caixa Exchange Online da conta autenticada e restricoes de envio.
+- `/organization` ou `/subscribedSkus`: confira respectivamente `Organization.Read.All` ou `LicenseAssignment.Read.All` e o acesso do usuario.
+
+Nao e possivel identificar qual desses requisitos faltou a partir da mensagem generica da v1.4.1. Repita com a versao atualizada e use a API e o codigo informados para corrigir o acesso no tenant. A ferramenta interrompe a pre-validacao quando dados obrigatorios estao inacessiveis; nao transforma acesso negado em ausencia de atividade nem amplia permissoes automaticamente.
+
+As consultas com `signInActivity` usam paginas de ate 500 usuarios e seguem `@odata.nextLink`, conforme o [limite do Graph](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0).
 
 ## Controle e revogação de acesso
 

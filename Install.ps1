@@ -8,7 +8,7 @@ configuracao local e, opcionalmente, executa a primeira avaliacao interativa.
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$InstallPath = "$env:ProgramData\M365LicenseAssessment",
-    [string]$RepositoryRawUrl = 'https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/main',
+    [string]$RepositoryRawUrl = 'https://raw.githubusercontent.com/JulioVicente/o365-telemetria-uso-licencas/v1.4.2',
     [switch]$SkipModuleInstall
 )
 
@@ -147,7 +147,7 @@ function Test-InstalledComponents([string]$Destination) {
 $existed = Test-Path -LiteralPath $InstallPath
 $rollback = Join-Path ([IO.Path]::GetTempPath()) ('m365-license-install-' + [guid]::NewGuid().ToString('N'))
 try {
-    Write-Host 'M365 License Assessment - Instalacao' -ForegroundColor Green
+    Write-Host 'M365 License Assessment v1.4.2 - Instalacao' -ForegroundColor Green
     Assert-Environment
     Ensure-GraphModule
     Ensure-7Zip
@@ -182,7 +182,7 @@ $arguments = @{ OutputPath=(Join-Path $PSScriptRoot 'output'); TelemetryPeriodDa
         Set-Content -LiteralPath $runner -Value $runnerContent -Encoding utf8
     }
 
-    Write-Host "`nInstalacao concluida em: $InstallPath" -ForegroundColor Green
+    Write-Host "`nComponentes preparados em: $InstallPath; validacao pendente." -ForegroundColor Cyan
     Write-Host "Executar: pwsh -NoProfile -File `"$runner`""
     if (-not $WhatIfPreference) {
         Write-Step 'Validando login, coleta e envio do relatorio'

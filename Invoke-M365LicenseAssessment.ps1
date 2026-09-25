@@ -14,7 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$solutionVersion = '1.4.1'
+$solutionVersion = '1.4.2'
 
 function Write-ExecutionStatus {
     param([int]$Percent, [string]$Message)
@@ -61,6 +61,86 @@ function Invoke-WithSpinner {
     try { & $Operation } finally { $spinner.Dispose() }
 }
 
+function Get-GraphFailureDiagnostic {
+    param([Management.Automation.ErrorRecord]$Failure, [string]$Method, [string]$Uri)
+    $status = 0
+    $exception = $Failure.Exception
+    while ($exception -and -not $status) {
+        foreach ($propertyName in 'StatusCode','ResponseStatusCode') {
+            $property = $exception.PSObject.Properties[$propertyName]
+            if ($property -and $null -ne $property.Value) {
+                try { $status = [int]$property.Value } catch { }
+            }
+        }
+        $response = $exception.PSObject.Properties['Response']
+        if (-not $status -and $response -and $response.Value) {
+            $property = $response.Value.PSObject.Properties['StatusCode']
+            if ($property -and $null -ne $property.Value) {
+                try { $status = [int]$property.Value } catch { }
+            }
+        }
+        $exception = $exception.InnerException
+    }
+    $message = $Failure.Exception.Message
+    if (-not $status -and $message -match '(?i)(?:status code|HTTP)\D{0,35}\b([45]\d{2})\b') { $status = [int]$Matches[1] }
+    if (-not $status -and $message -match '\bForbidden\b') { $status = 403 }
+    $code = $null; $requestId = $null
+    if ($Failure.ErrorDetails -and $Failure.ErrorDetails.Message) {
+        try {
+            $payload = $Failure.ErrorDetails.Message | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            if ($payload -is [Collections.IDictionary] -and $payload['error'] -is [Collections.IDictionary]) {
+                $errorData = $payload['error']
+                $code = [string]$errorData['code']
+                if ($errorData['message']) { $message = [string]$errorData['message'] }
+                if ($errorData['innerError'] -is [Collections.IDictionary]) { $requestId = [string]$errorData['innerError']['request-id'] }
+            }
+        } catch { } # A malformed response must not replace the original failure.
+    }
+    $action = 'Confira a disponibilidade do servico e o erro original.'
+    if ($status -eq 403 -or $code -match 'Authorization_RequestDenied|AccessDenied|Forbidden') {
+        $action = 'Confira consentimento administrativo, funcao ativa do usuario e politicas do tenant.'
+        if ($Uri -match '/users\?.*signInActivity') {
+            $action += ' signInActivity exige User.Read.All, AuditLog.Read.All, Microsoft Entra ID P1/P2 e uma funcao compativel, como Reports Reader (Leitor de Relatorios). Se usa PIM, ative a funcao antes de autenticar novamente.'
+        } elseif ($Uri -match '/(?:copilot/)?reports/') {
+            $action += ' Relatorios de uso exigem Reports.Read.All e funcao autorizada para relatorios, como Reports Reader (Leitor de Relatorios).'
+        } elseif ($Uri -match '/me/sendMail') {
+            $action += ' Confira Mail.Send delegado, caixa Exchange Online da conta autenticada e restricoes de envio.'
+        } elseif ($Uri -match '/subscribedSkus') {
+            $action += ' Confira LicenseAssignment.Read.All e acesso do usuario aos dados de licencas.'
+        } elseif ($Uri -match '/organization') {
+            $action += ' Confira Organization.Read.All.'
+        } elseif ($Uri -match '/me(?:\?|$)') {
+            $action += ' Confira a conta corporativa e o acesso delegado ao perfil do proprio usuario.'
+        }
+    } elseif ($status -eq 401) {
+        $action = 'Autentique novamente com a conta e o tenant corretos; confira expiracao da sessao e politicas de acesso.'
+    } elseif ($status -eq 429 -or $status -ge 500) {
+        $action = 'O servico continuou indisponivel apos as tentativas. Aguarde e repita; confira conectividade se persistir.'
+    }
+    [pscustomobject]@{ Method=$Method; Uri=$Uri; HttpStatus=$status; GraphCode=$code; RequestId=$requestId; Message=$message; Action=$action }
+}
+
+function Save-AssessmentFailure {
+    param([Management.Automation.ErrorRecord]$Failure, [string]$Directory = ([IO.Path]::GetTempPath()))
+    $diagnostic = $null
+    $exception = $Failure.Exception
+    while ($exception) {
+        if ($exception.Data.Contains('M365Diagnostic')) { $diagnostic = $exception.Data['M365Diagnostic']; break }
+        $exception = $exception.InnerException
+    }
+    $path = Join-Path $Directory ('m365-preflight-' + [guid]::NewGuid().ToString('N') + '.json')
+    try {
+        # Keep the diagnostic outside the installation rollback; never save tokens,
+        # HTTP headers, request bodies, downloaded CSVs or email attachments here.
+        @{ Version=$solutionVersion; Stage='pre-validacao'; TimestampUtc=[datetime]::UtcNow.ToString('o'); Error=$Failure.Exception.Message; Graph=$diagnostic } |
+            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding utf8 -ErrorAction Stop
+        return $path
+    } catch {
+        Write-Warning "Nao foi possivel salvar o diagnostico em '$path': $($_.Exception.Message)"
+        return 'indisponivel; consulte a causa exibida no terminal'
+    }
+}
+
 function Invoke-GraphRequestWithRetry {
     param(
         [Parameter(Mandatory)][ValidateSet('GET','POST')][string]$Method,
@@ -68,20 +148,29 @@ function Invoke-GraphRequestWithRetry {
         [object]$Body,
         [string]$OutputFilePath,
         [string]$ContentType,
-        [int]$MaxAttempts = 4
+        [ValidateRange(1,10)][int]$MaxAttempts = 4
     )
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
-            $parameters = @{ Method=$Method; Uri=$Uri }
+            $parameters = @{ Method=$Method; Uri=$Uri; ErrorAction='Stop' }
             if ($PSBoundParameters.ContainsKey('Body')) { $parameters.Body = $Body }
             if ($OutputFilePath) { $parameters.OutputFilePath = $OutputFilePath }
             else { $parameters.OutputType = 'PSObject' }
             if ($ContentType) { $parameters.ContentType = $ContentType }
             return Invoke-MgGraphRequest @parameters
         } catch {
-            $message = $_.Exception.Message
-            $isTransient = $message -match '(429|TooManyRequests|throttl|500|502|503|504|InternalServerError|BadGateway|ServiceUnavailable|GatewayTimeout|temporar)'
-            if (-not $isTransient -or $attempt -eq $MaxAttempts) { throw }
+            $diagnostic = Get-GraphFailureDiagnostic -Failure $_ -Method $Method -Uri $Uri
+            $isTransient = $diagnostic.HttpStatus -in @(429,500,502,503,504)
+            if (-not $isTransient -and -not $diagnostic.HttpStatus) {
+                $isTransient = $diagnostic.GraphCode -in @('TooManyRequests','InternalServerError','BadGateway','ServiceUnavailable','GatewayTimeout')
+            }
+            if (-not $isTransient -or $attempt -eq $MaxAttempts) {
+                $statusText = if ($diagnostic.HttpStatus) { [string]$diagnostic.HttpStatus } else { 'indisponivel' }
+                $details = "[M365-GRAPH] $Method $Uri | HTTP: $statusText | Graph: $($diagnostic.GraphCode) | request-id: $($diagnostic.RequestId). $($diagnostic.Action) Erro original: $($diagnostic.Message)"
+                $wrapped = [InvalidOperationException]::new($details, $_.Exception)
+                $wrapped.Data['M365Diagnostic'] = $diagnostic
+                throw $wrapped
+            }
             $delay = [math]::Min(30, [math]::Pow(2, $attempt))
             Write-Warning "Falha transitoria do Microsoft Graph (tentativa $attempt/$MaxAttempts). Nova tentativa em $delay segundos."
             Start-Sleep -Seconds $delay
@@ -238,7 +327,7 @@ $scopes = @('User.Read.All', 'AuditLog.Read.All', 'LicenseAssignment.Read.All', 
 if ($SendEmail) { $scopes += 'Mail.Send' }
 Write-ExecutionStatus 5 'Aguardando autenticacao no Microsoft 365...'
 Write-Host "M365 License Assessment v$solutionVersion" -ForegroundColor Green
-Connect-MgGraph -Scopes $scopes -NoWelcome
+Connect-MgGraph -Scopes $scopes -ContextScope Process -NoWelcome
 
 $context = Get-MgContext
 if ($ExpectedAccount -and $context.Account -ine $ExpectedAccount) {
@@ -256,7 +345,10 @@ try {
     Invoke-WithSpinner 'Validando identidade e perfil autenticado' {
         Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail' | Out-Null
     }
-    Invoke-WithSpinner 'Validando leitura de usuarios e atividade de login' {
+    Invoke-WithSpinner 'Validando leitura basica de usuarios' {
+        Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/users?$top=1&$select=id' | Out-Null
+    }
+    Invoke-WithSpinner 'Validando acesso a atividade de login (Entra ID P1/P2)' {
         Invoke-GraphRequestWithRetry -Method GET -Uri 'https://graph.microsoft.com/v1.0/users?$top=1&$select=id,signInActivity' | Out-Null
     }
     Invoke-WithSpinner 'Validando leitura de licencas e SKUs' {
@@ -282,7 +374,8 @@ try {
         }
     }
 } catch {
-    throw "Pre-validacao interrompida; nenhuma analise foi iniciada. API ou permissao indisponivel: $($_.Exception.Message)"
+    $diagnosticPath = Save-AssessmentFailure -Failure $_
+    throw [InvalidOperationException]::new("Pre-validacao interrompida; nenhuma analise foi iniciada. Diagnostico preservado: $diagnosticPath. $($_.Exception.Message)", $_.Exception)
 }
 Write-Host 'Pre-validacao concluida com sucesso em todas as APIs.' -ForegroundColor Green
 Write-ExecutionStatus 10 'Iniciando coleta completa; esta etapa pode levar alguns minutos.'
@@ -304,7 +397,7 @@ $runId = $now.ToString('yyyyMMdd-HHmmss')
 $runPath = Join-Path $OutputPath $runId
 New-Item -ItemType Directory -Path $runPath -Force | Out-Null
 
-$usersUri = "https://graph.microsoft.com/v1.0/users?`$select=id,displayName,userPrincipalName,userType,accountEnabled,assignedLicenses,signInActivity&`$top=999"
+$usersUri = "https://graph.microsoft.com/v1.0/users?`$select=id,displayName,userPrincipalName,userType,accountEnabled,assignedLicenses,signInActivity&`$top=500"
 Write-ExecutionStatus 18 'Coletando usuarios e atividade de login...'
 $users = @(Invoke-WithSpinner 'Consultando diretorio' { Get-GraphCollection $usersUri })
 if (-not $IncludeGuests) { $users = @($users | Where-Object userType -EQ 'Member') }
